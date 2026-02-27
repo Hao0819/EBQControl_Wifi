@@ -113,6 +113,23 @@ function formatCurrentA(v) {
   // Show larger negative values as-is (if they ever happen)
   return n.toFixed(2);
 }
+
+function statusFromCurrentEBQ(cur, prevStatus) {
+  const n = Number(cur);
+  if (!Number.isFinite(n)) return prevStatus || 'UNKNOWN';
+
+  // 距离 OFF(-0.1) 和 ON(0) 谁更近就算谁
+  const dOff = Math.abs(n - (-0.1));
+  const dOn  = Math.abs(n - 0);
+
+  // ✅ 防止极端噪声：如果离两者都很远，就保持原状态
+  // 例如 n = -0.5 或 2.3，这种不是协议值
+  const FAR = 0.2; // 你可以调小/调大
+  if (Math.min(dOff, dOn) > FAR) return prevStatus || 'ON';
+
+  return dOff < dOn ? 'OFF' : 'ON';
+}
+
 function sanitizeName(input) {
   const s = String(input ?? '').trim();
 
@@ -267,6 +284,33 @@ async function saveNameCache({ cpid, deviceId, partialMap }) {
   }
 }
 
+function statusFromCurrentWithDeadband(cur, prevStatus) {
+  const n = Number(cur);
+  if (!Number.isFinite(n)) return prevStatus || 'UNKNOWN';
+
+  // OFF 阈值：要足够负才算 OFF（避免 -0.01 抖动）
+  if (n <= -0.2) return 'OFF';
+
+  // ON 阈值：要足够正才算 ON（避免 0.00 附近抖动）
+  if (n >= 0.05) return 'ON';
+
+  // 死区：保持原来的状态
+  return prevStatus || 'ON';
+}
+
+function isCurrentConfirmStatusEBQ(cur, desired) {
+  const n = Number(cur);
+  if (!Number.isFinite(n)) return false;
+
+  // 你的设备：OFF = -0.1，ON = 0
+  // 给容差
+  const OFF_MIN = -0.12, OFF_MAX = -0.08;
+  const ON_MIN = -0.03,  ON_MAX  = 0.03; // 0 附近算 ON
+
+  if (desired === 'OFF') return n >= OFF_MIN && n <= OFF_MAX;
+  return n >= ON_MIN && n <= ON_MAX;
+}
+
 export default memo(function MqttDeviceGridScreen() {
   const navigation = useNavigation();
   const route = useRoute();
@@ -345,7 +389,8 @@ export default memo(function MqttDeviceGridScreen() {
   const fastTimerRef = useRef(null);
 // 在组件里加一个 ref
 const toggleLockRef = useRef(new Map()); // channelId → expireTimestamp
-
+const pendingToggleRef = useRef(new Map()); 
+// channelId -> { desired:'ON'|'OFF', expiresAt:number, okCount:number }
   const setStatusTextSoft = useCallback((s) => {
     statusPendingRef.current = String(s ?? '');
     if (statusTimerRef.current) return;
@@ -457,41 +502,77 @@ const toggleLockRef = useRef(new Map()); // channelId → expireTimestamp
         let didChange = false;
 
         for (const [idStr, partial] of Object.entries(batch)) {
-          const id = Number(idStr);
-          if (!Number.isFinite(id)) continue;
+  const id = Number(idStr);
+  if (!Number.isFinite(id)) continue;
 
-          const old = prev[id] || (id >= 201 ? default3P(id) : default1P(id));
-          let out = old;
+  const old = prev[id] || (id >= 201 ? default3P(id) : default1P(id));
+  let out = old;
 
-         // 1-phase current (ALWAYS derive ON/OFF from current)
-if (partial.__cur1p != null) {
+  // ✅ 1) 一开始就算锁（每个 id 自己算一次）
+  const lockExp = toggleLockRef.current.get(id) || 0;
+  const isLocked = Date.now() < lockExp;
+  const pend = pendingToggleRef.current.get(id);
+const isPending = !!(pend && Date.now() < pend.expiresAt);
+  // ✅ 锁定期内：如果这次 patch 只带 status（没有电流/其他信息），直接忽略
+if (isLocked && partial && typeof partial === 'object') {
+  const keys = Object.keys(partial);
+  const hasCur = partial.__cur1p != null || partial.__cur3p != null;
+
+  // 只有 status 或（有 status 但没有电流）→ 锁定期不处理
+  if (keys.length === 1 && keys[0] === 'status') {
+    continue;
+  }
+  if (!hasCur && keys.includes('status')) {
+    // 后面合并 rest 时也会删 status，但这里提前拦截更干净
+    // 继续往下走也行；为了最稳，直接把 status 从 rest0 过滤即可（你已做）
+  }
+}
+
+  // ✅ 2) 1相电流：用电流推导状态，但锁定期不改 status
+ if (partial.__cur1p != null) {
   const curNum = Number(partial.__cur1p);
   if (Number.isFinite(curNum)) {
-    const statusFromCur = curNum < 0 ? 'OFF' : 'ON';
 
-        // ✅ 锁定期内，只更新 current 数值，不覆盖 status
-    const lockExp = toggleLockRef.current.get(id) || 0;
-    const isLocked = Date.now() < lockExp;
+    // ✅ pending：用 current 来确认是否已经到达目标状态
+    if (isPending) {
+      const desired = pend.desired;
+      const ok = isCurrentConfirmStatusEBQ(curNum, desired);
 
+      if (ok) pend.okCount += 1;
+      else pend.okCount = 0;
+
+      // 连续两次确认 -> 完成
+      if (pend.okCount >= 2) {
+        pendingToggleRef.current.delete(id);
+        toggleLockRef.current.set(id, 0); // 可选：提前解除 lock
+      } else {
+        // pending 未完成：强制 UI status = desired
+        out = { ...out, status: desired };
+      }
+    }
+
+    // 电流数值永远更新
     out = {
       ...out,
       current: formatCurrentA(curNum),
       seen: true,
-       ...(isLocked ? {} : { status: statusFromCur }), // ✅ 锁定时不改 status
-    }; 
+      // ✅ 非 pending 才允许 status 跟随 current/锁逻辑
+      ...(isPending ? {} : (isLocked ? {} : { status: statusFromCurrentEBQ(curNum, out.status) })),
+    };
   }
 }
 
-// 3-phase current (ALWAYS derive ON/OFF from current)
+  // ✅ 3) 3相电流：同理
 if (partial.__cur3p != null) {
   const t = partial.__cur3p;
   if (Array.isArray(t) && t.length >= 3) {
     const a = Number(t[0]), b = Number(t[1]), c = Number(t[2]);
     if ([a, b, c].every(Number.isFinite)) {
-      const statusFromCur = (a < 0 || b < 0 || c < 0) ? 'OFF' : 'ON';
-// ✅ 锁定期内，只更新电流数值，不覆盖 status
-      const lockExp = toggleLockRef.current.get(id) || 0;
-      const isLocked = Date.now() < lockExp;
+
+      const aSt = statusFromCurrentEBQ(a, out.status);
+      const bSt = statusFromCurrentEBQ(b, out.status);
+      const cSt = statusFromCurrentEBQ(c, out.status);
+      const statusFromCur = (aSt === 'OFF' || bSt === 'OFF' || cSt === 'OFF') ? 'OFF' : 'ON';
 
       out = {
         ...out,
@@ -500,29 +581,33 @@ if (partial.__cur3p != null) {
         current1: formatCurrentA(a),
         current2: formatCurrentA(b),
         current3: formatCurrentA(c),
-        ...(isLocked ? {} : { status: statusFromCur }), // ✅ 锁定时不改 status
-
+        ...(isLocked ? {} : { status: statusFromCur }),
       };
     }
   }
 }
+  // ✅ 4) 合并 rest，但锁定期禁止 rest.status 覆盖（关键：防闪）
+  const { __cur1p, __cur3p, ...rest0 } = partial;
 
-          const { __cur1p, __cur3p, ...rest } = partial;
-          if (Object.keys(rest).length > 0) {
-            out = { ...out, ...rest };
-          }
+ let rest = rest0;
+if ((isLocked || isPending) && rest0 && Object.prototype.hasOwnProperty.call(rest0, 'status')) {
+  rest = { ...rest0 };
+  delete rest.status;
+}
+  
 
-          // Skip if nothing changed
-          if (out === old) continue;
+  if (rest && Object.keys(rest).length > 0) {
+    out = { ...out, ...rest };
+  }
 
-          // Clone map only once, at first change
-          if (!didChange) {
-            next = { ...prev };
-            didChange = true;
-          }
+  if (out === old) continue;
 
-          next[id] = out;
-        }
+  if (!didChange) {
+    next = { ...prev };
+    didChange = true;
+  }
+  next[id] = out;
+}
 
         return didChange ? next : prev;
       });
@@ -978,13 +1063,23 @@ if (up.startsWith('SUBSCRIBED')) {
 
             const act = onVal != null ? 'ON' : offVal != null ? 'OFF' : null;
             const ch = onVal ?? offVal;
+if (act && ch != null) {
+  const m3 = String(ch ?? '').match(/C(\d+)/i);
+  const id = m3 ? parseInt(m3[1], 10) : parseInt(ch, 10);
+  if (Number.isFinite(id)) {
+    const exp = toggleLockRef.current.get(id) || 0;
+    const locked = Date.now() < exp;
+const pend = pendingToggleRef.current.get(id);
+const pending = !!(pend && Date.now() < pend.expiresAt);
 
-            if (act && ch != null) {
-              const m3 = String(ch ?? '').match(/C(\d+)/i);
-              const id = m3 ? parseInt(m3[1], 10) : parseInt(ch, 10);
-              if (Number.isFinite(id)) put(id, { status: act, seen: true });
-            }
-
+// ✅ 锁定/等待确认期间都不要让 echo 改 status
+if (!locked && !pending) {
+  put(id, { status: act, seen: true });
+} else {
+  put(id, { seen: true });
+}
+  }
+}
             // 3b) Set Name echo
             for (const one of cmdList) {
               const setNameObj = one?.['Set Name'];
@@ -1208,48 +1303,58 @@ useFocusEffect(
   }, [clearAllTimeouts, stopFastIntervalTimer])
 );
 
-  // ===== Publish commands =====
-  const handleToggle = useCallback((id, action) => {
-    if (connectionStatus !== CONN.CONNECTED) return;
+// ===== Publish commands =====
+const handleToggle = useCallback((id, action) => {
+  if (connectionStatus !== CONN.CONNECTED) return;
 
-    // Give touch events priority: pause UI flush briefly and cancel pending timer
-    suspendUiUntilRef.current = Date.now() + 250;
-    if (patchTimerRef.current) {
-      clearTimeout(patchTimerRef.current);
-      patchTimerRef.current = null;
-    }
+  // ✅ 统一把 id 变成 number，避免 Map key 类型不一致
+  const channelId = Number(id);
+  if (!Number.isFinite(channelId)) return;
 
-    const act = action === 'OFF' ? 'OFF' : 'ON';
-const lockDuration = Platform.OS === 'android' ? 5000 : 3000;
-    toggleLockRef.current.set(id, Date.now() + lockDuration);
-    // Instant UI feedback (no batching)
-    applyTagPatchImmediate(id, { status: act, seen: true });
+  // Give touch events priority: pause UI flush briefly and cancel pending timer
+  suspendUiUntilRef.current = Date.now() + 250;
+  if (patchTimerRef.current) {
+    clearTimeout(patchTimerRef.current);
+    patchTimerRef.current = null;
+  }
 
-    // Publish in next tick (do not block UI thread)
-    safeSetTimeout(() => {
-      const cpid = derived.cpid;
-      const gatewayId = derived.deviceId;
-      if (!cpid || !gatewayId) return;
+  const act = action === 'OFF' ? 'OFF' : 'ON';
+  const lockDuration = Platform.OS === 'android' ? 5000 : 3000;
 
-      const payload = JSON.stringify(
-        buildCmdSupervisorExact({
-          cpid,
-          targetId: gatewayId,
-          action: act,
-          channelId: id,
-          ackId: randomHex8(),
-          useCPrefix: true,
-        })
-      );
+  // ✅ Map 里只用数字 key
+  toggleLockRef.current.set(channelId, Date.now() + lockDuration);
+pendingToggleRef.current.set(channelId, {
+  desired: act,                 // 'ON' or 'OFF'
+  expiresAt: Date.now() + 8000, // 最多等8秒确认
+  okCount: 0,
+});
+  // Instant UI feedback (no batching)
+  applyTagPatchImmediate(channelId, { status: act, seen: true });
 
-      publishControl(payload).catch((e) => {
-        toast(e?.message || String(e));
-        toggleLockRef.current.delete(id);
-        enqueueTagPatch({ [id]: { status: act === 'ON' ? 'OFF' : 'ON', seen: true } });
-      });
-    }, 0);
-  }, [connectionStatus, derived.cpid, derived.deviceId, publishControl, enqueueTagPatch, applyTagPatchImmediate]);
+  // Publish in next tick (do not block UI thread)
+  safeSetTimeout(() => {
+    const cpid = derived.cpid;
+    const gatewayId = derived.deviceId;
+    if (!cpid || !gatewayId) return;
 
+    const payload = JSON.stringify(
+      buildCmdSupervisorExact({
+        cpid,
+        targetId: gatewayId,
+        action: act,
+        channelId: channelId, // ✅ 用数字 channelId
+        ackId: randomHex8(),
+        useCPrefix: true,
+      })
+    );
+
+    publishControl(payload).catch((e) => {
+      toast(e?.message || String(e));
+      toggleLockRef.current.delete(channelId); // ✅ delete 也用数字
+      enqueueTagPatch({ [channelId]: { status: act === 'ON' ? 'OFF' : 'ON', seen: true } });
+    });
+  }, 0);
+}, [connectionStatus, derived.cpid, derived.deviceId, publishControl, enqueueTagPatch, applyTagPatchImmediate]);
   const publishSetName = useCallback(async (ch, newName) => {
     if (connectionStatus !== CONN.CONNECTED) return;
 
