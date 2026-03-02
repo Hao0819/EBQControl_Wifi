@@ -30,7 +30,7 @@ export default function MqttDeviceListScreen({ navigation }) {
         String(prev?.status ?? '') === String(next?.status ?? '') &&
         String(prev?.error ?? '') === String(next?.error ?? '');
 
-      // ✅ 如果没变化，就不更新 state（避免疯狂 rerender）
+      // ✅ If there are no changes, do not update the state (to avoid excessive rerendering).
       return same ? prev : next;
     });
   });
@@ -70,7 +70,7 @@ export default function MqttDeviceListScreen({ navigation }) {
                 style: 'destructive',
                 onPress: async () => {
                   await clearMqttDevices();
-                  setDevices([]);   // 立即更新 UI
+                  setDevices([]);   // Update UI now
                 },
               },
             ]
@@ -78,7 +78,7 @@ export default function MqttDeviceListScreen({ navigation }) {
         }}
         style={{ paddingHorizontal: 14 }}
       >
-        {/* 用 delete 图标，而不是 refresh */}
+        {/* Use the delete icon instead of refresh.*/}
         <MaterialIcons name="delete" size={22} color="#DC2626" />
       </TouchableOpacity>
     ),
@@ -139,7 +139,7 @@ useEffect(() => {
           onPress: async () => {
             try {
               const next = await removeMqttDevice(item?.deviceId);
-              setDevices(next); // ✅ 立即更新 UI
+              setDevices(next);
             } catch (e) {
               Alert.alert('Delete failed', e?.message || String(e));
             }

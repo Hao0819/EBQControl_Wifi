@@ -124,7 +124,7 @@ export class MqttClient {
      .then(() => {
   this.connected = true;
   if (!topic) return true;
-  // ✅ Android 不传 clientId
+  // ✅ Android does not transmit clientId
   if (Platform.OS === 'android') {
     return MqttNative.subscribe(String(topic), 0).then(() => true);
   }

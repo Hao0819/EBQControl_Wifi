@@ -183,7 +183,7 @@ export async function connectDevice(device, { silent = false } = {}) {
   const deviceId = String(device.deviceId ?? device.id ?? device.friendlyName ?? '');
   const port = Number(device.port) || 1883;
 
- // ✅ 优先使用设备保存的 useTls（如果有），否则按端口推断
+ // ✅ Prioritize using the device-saved useTls (if available), otherwise infer from the port.
 const useTls =
   typeof device.useTls === 'boolean'
     ? device.useTls

@@ -5,7 +5,6 @@ import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import info.mqtt.android.service.MqttAndroidClient
 import org.eclipse.paho.client.mqttv3.*
-
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -19,6 +18,10 @@ class MqttNativeModule(private val reactContext: ReactApplicationContext)
   override fun getName(): String = "MqttNative"
 
   private var client: MqttAndroidClient? = null
+
+  // Track active client meta so every event can include it
+  private var currentClientId: String = ""
+  private var currentUri: String = ""
 
   private fun emit(event: String, map: WritableMap) {
     reactContext
@@ -93,7 +96,12 @@ class MqttNativeModule(private val reactContext: ReactApplicationContext)
     try {
       val scheme = if (useTls) "ssl" else "tcp"
       val uri = "$scheme://${host.trim()}:$port"
-Log.d("MqttNative", "connect host=$host port=$port useTls=$useTls uri=$uri")
+      Log.d("MqttNative", "connect host=$host port=$port useTls=$useTls uri=$uri")
+
+      // Save meta for event routing / logging
+      currentClientId = clientId
+      currentUri = uri
+
       // Close old client if any
       client?.let {
         try { it.unregisterResources() } catch (_: Throwable) {}
@@ -106,18 +114,51 @@ Log.d("MqttNative", "connect host=$host port=$port useTls=$useTls uri=$uri")
       c.setCallback(object : MqttCallbackExtended {
         override fun connectComplete(reconnect: Boolean, serverURI: String?) {
           val m = Arguments.createMap()
-          m.putString("status", "CONNECTED ${serverURI ?: uri}")
+          m.putString("clientId", currentClientId)
+          m.putString("status", "CONNECTED ${serverURI ?: currentUri}")
           emit("mqtt_status", m)
         }
 
         override fun connectionLost(cause: Throwable?) {
+          val sb = StringBuilder()
+          sb.append("connectionLost")
+
+          if (cause is MqttException) {
+            sb.append(" (reasonCode=").append(cause.reasonCode).append(")")
+          }
+
+          sb.append(": ").append(cause?.message ?: "null")
+
+          var c2 = cause?.cause
+          var depth = 0
+          while (c2 != null && depth < 6) {
+            sb.append(" | cause=")
+              .append(c2.javaClass.simpleName)
+              .append(": ")
+              .append(c2.message ?: "")
+            c2 = c2.cause
+            depth++
+          }
+
+          Log.e("MqttNative", "[DISCONNECTED] clientId=$currentClientId uri=$currentUri $sb", cause)
+
+          // mqtt_disconnected (JS can show toast etc.)
           val m = Arguments.createMap()
-          m.putString("error", cause?.message ?: "connectionLost")
+          m.putString("clientId", currentClientId)
+          m.putString("uri", currentUri)
+          m.putString("error", sb.toString())
           emit("mqtt_disconnected", m)
+
+          // mqtt_status DISCONNECTED (keep JS state machine consistent)
+          val s = Arguments.createMap()
+          s.putString("clientId", currentClientId)
+          s.putString("status", "DISCONNECTED $currentUri")
+          emit("mqtt_status", s)
         }
 
         override fun messageArrived(topic: String?, message: MqttMessage?) {
           val m = Arguments.createMap()
+          m.putString("clientId", currentClientId)
           m.putString("topic", topic ?: "")
           m.putString("payload", message?.toString() ?: "")
           emit("mqtt_message", m)
@@ -128,21 +169,29 @@ Log.d("MqttNative", "connect host=$host port=$port useTls=$useTls uri=$uri")
 
       val opts = MqttConnectOptions().apply {
         isCleanSession = true
-        isAutomaticReconnect = true
+
+        // Debug first: disable auto reconnect to see the first error clearly
+        isAutomaticReconnect = false
+
         connectionTimeout = 10
         keepAliveInterval = 20
+
+        // Optional: force MQTT 3.1.1 for compatibility
+        mqttVersion = MqttConnectOptions.MQTT_VERSION_3_1_1
 
         if (username.isNotBlank()) userName = username
         if (password.isNotEmpty()) this.password = password.toCharArray()
       }
 
-      // ✅ TrustAll in BOTH Debug + Release when TLS is used (INSECURE)
+      // INSECURE trust-all (for debugging / self-signed)
       if (useTls) {
         disableHostnameVerification(opts)
         opts.socketFactory = trustAllSocketFactory()
       }
 
+      // Emit CONNECTING (with clientId)
       val s = Arguments.createMap()
+      s.putString("clientId", currentClientId)
       s.putString("status", "CONNECTING $uri")
       emit("mqtt_status", s)
 
@@ -172,6 +221,7 @@ Log.d("MqttNative", "connect host=$host port=$port useTls=$useTls uri=$uri")
     c.subscribe(topic, qos, null, object : IMqttActionListener {
       override fun onSuccess(asyncActionToken: IMqttToken?) {
         val m = Arguments.createMap()
+        m.putString("clientId", currentClientId)
         m.putString("status", "SUBSCRIBED $topic")
         emit("mqtt_status", m)
         promise.resolve(true)
@@ -184,27 +234,21 @@ Log.d("MqttNative", "connect host=$host port=$port useTls=$useTls uri=$uri")
   }
 
   @ReactMethod
-fun publish(topic: String, payload: String, qos: Int, retained: Boolean, promise: Promise) {
-  val c = client
-  if (c == null || !c.isConnected) {
-    promise.reject("MQTT_NOT_CONNECTED", "Client not connected")
-    return
-  }
+  fun publish(topic: String, payload: String, qos: Int, retained: Boolean, promise: Promise) {
+    val c = client
+    if (c == null || !c.isConnected) {
+      promise.reject("MQTT_NOT_CONNECTED", "Client not connected")
+      return
+    }
 
-  try {
-    val q = qos.coerceIn(0, 2)
-    c.publish(
-      topic,
-      payload.toByteArray(Charsets.UTF_8),
-      q,
-      retained
-    )
-    promise.resolve(true)
-  } catch (t: Throwable) {
-    rejectMqtt(promise, "MQTT_PUB_FAIL", "publish failed topic=$topic", t)
+    try {
+      val q = qos.coerceIn(0, 2)
+      c.publish(topic, payload.toByteArray(Charsets.UTF_8), q, retained)
+      promise.resolve(true)
+    } catch (t: Throwable) {
+      rejectMqtt(promise, "MQTT_PUB_FAIL", "publish failed topic=$topic", t)
+    }
   }
-}
-
 
   @ReactMethod
   fun disconnect(promise: Promise) {
@@ -218,12 +262,14 @@ fun publish(topic: String, payload: String, qos: Int, retained: Boolean, promise
       c.disconnect(null, object : IMqttActionListener {
         override fun onSuccess(asyncActionToken: IMqttToken?) {
           val m = Arguments.createMap()
+          m.putString("clientId", currentClientId)
           m.putString("status", "DISCONNECTED")
           emit("mqtt_status", m)
           promise.resolve(true)
         }
 
         override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+          // still resolve to avoid blocking UI
           promise.resolve(true)
         }
       })

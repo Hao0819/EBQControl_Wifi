@@ -5,7 +5,7 @@ import CocoaMQTT
 @objc(MqttNative)
 class MqttNative: RCTEventEmitter, CocoaMQTTDelegate {
 
-  // ✅ 多实例字典：clientId → CocoaMQTT
+// ✅ Multi-instance dictionary: clientId → CocoaMQTT
   private var clients: [String: CocoaMQTT] = [:]
   private var resolvers: [String: RCTPromiseResolveBlock] = [:]
   private var rejecters: [String: RCTPromiseRejectBlock] = [:]
@@ -20,7 +20,7 @@ class MqttNative: RCTEventEmitter, CocoaMQTTDelegate {
   override func startObserving() { hasListeners = true }
   override func stopObserving() { hasListeners = false }
 
-  // ✅ 必须调用 super
+ // ✅ Super must be called
   override func addListener(_ eventName: String) {
     super.addListener(eventName)
   }
@@ -28,7 +28,7 @@ class MqttNative: RCTEventEmitter, CocoaMQTTDelegate {
     super.removeListeners(count)
   }
 
-  // ✅ 所有 emit 都带 clientId，JS 侧可以路由
+  // ✅ All emits include a clientId, allowing routing in the JS side.
   private func emit(_ name: String, clientId: String, extra: [String: Any] = [:]) {
     guard hasListeners else { return }
     var body: [String: Any] = ["clientId": clientId]
@@ -36,11 +36,11 @@ class MqttNative: RCTEventEmitter, CocoaMQTTDelegate {
     sendEvent(withName: name, body: body)
   }
 
-  // MARK: - 关闭单个 client
+  // MARK: - Close a single client
 
   private func closeClient(clientId: String, reason: String = "closed") {
     if let old = clients[clientId] {
-      old.delegate = nil   // ✅ 切断回调，防止旧事件污染
+      old.delegate = nil  // ✅ Cut off callbacks to prevent old events from contaminating the system.
       old.disconnect()
       clients.removeValue(forKey: clientId)
     }
@@ -68,10 +68,10 @@ class MqttNative: RCTEventEmitter, CocoaMQTTDelegate {
     let p = UInt16(truncating: port)
     let tls = useTls.boolValue
 
-    // 如果同一个 clientId 已有连接，先关掉
+    // If a connection already exists for the same clientId, close it first.
     closeClient(clientId: clientId, reason: "reconnecting")
 
-    // 保存 promise
+    // save promise
     resolvers[clientId] = resolve
     rejecters[clientId] = reject
 
@@ -150,7 +150,7 @@ class MqttNative: RCTEventEmitter, CocoaMQTTDelegate {
     resolve(true)
   }
 
-  // ✅ 断开全部连接（app 退出 / 登出时用）
+  /// ✅ Disconnect all connections (used when exiting/logging out of the app)
   @objc(disconnectAll:rejecter:)
   func disconnectAll(
     _ resolve: @escaping RCTPromiseResolveBlock,
@@ -219,5 +219,5 @@ class MqttNative: RCTEventEmitter, CocoaMQTTDelegate {
   func mqtt(_ mqtt: CocoaMQTT, didSubscribeTopics success: NSDictionary, failed: [String]) {}
   func mqtt(_ mqtt: CocoaMQTT, didUnsubscribeTopics topics: [String]) {}
   func mqttDidPing(_ mqtt: CocoaMQTT) {}
-  func mqttDidReceivePong(_ mqtt: CocoaMQTT) {}  // ← 只保留一个
+  func mqttDidReceivePong(_ mqtt: CocoaMQTT) {}  
 }

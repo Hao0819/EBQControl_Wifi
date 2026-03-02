@@ -118,13 +118,13 @@ function statusFromCurrentEBQ(cur, prevStatus) {
   const n = Number(cur);
   if (!Number.isFinite(n)) return prevStatus || 'UNKNOWN';
 
-  // 距离 OFF(-0.1) 和 ON(0) 谁更近就算谁
+// The value closer to OFF(-0.1) or ON(0) is considered the one that determines the value.
   const dOff = Math.abs(n - (-0.1));
   const dOn  = Math.abs(n - 0);
 
-  // ✅ 防止极端噪声：如果离两者都很远，就保持原状态
-  // 例如 n = -0.5 或 2.3，这种不是协议值
-  const FAR = 0.2; // 你可以调小/调大
+  // ✅ Prevent extreme noise: If far from both, maintain the original state
+// For example, n = -0.5 or 2.3, these are not protocol values
+  const FAR = 0.2; //  can adjust it to smaller/larger
   if (Math.min(dOff, dOn) > FAR) return prevStatus || 'ON';
 
   return dOff < dOn ? 'OFF' : 'ON';
@@ -288,13 +288,13 @@ function statusFromCurrentWithDeadband(cur, prevStatus) {
   const n = Number(cur);
   if (!Number.isFinite(n)) return prevStatus || 'UNKNOWN';
 
-  // OFF 阈值：要足够负才算 OFF（避免 -0.01 抖动）
+  // OFF threshold: must be negative enough to be considered OFF (to avoid -0.01 jitter)
   if (n <= -0.2) return 'OFF';
 
-  // ON 阈值：要足够正才算 ON（避免 0.00 附近抖动）
+  // ON threshold: must be positive enough to be considered ON (to avoid jitter around 0.00)
   if (n >= 0.05) return 'ON';
 
-  // 死区：保持原来的状态
+  // Dead zone: Maintain the original state
   return prevStatus || 'ON';
 }
 
@@ -302,10 +302,10 @@ function isCurrentConfirmStatusEBQ(cur, desired) {
   const n = Number(cur);
   if (!Number.isFinite(n)) return false;
 
-  // 你的设备：OFF = -0.1，ON = 0
-  // 给容差
-  const OFF_MIN = -0.12, OFF_MAX = -0.08;
-  const ON_MIN = -0.03,  ON_MAX  = 0.03; // 0 附近算 ON
+// Your device: OFF = -0.1, ON = 0
+
+ const OFF_MIN = -0.20, OFF_MAX = -0.05;
+const ON_MIN  = -0.05, ON_MAX  = 0.08;
 
   if (desired === 'OFF') return n >= OFF_MIN && n <= OFF_MAX;
   return n >= ON_MIN && n <= ON_MAX;
@@ -316,7 +316,7 @@ export default memo(function MqttDeviceGridScreen() {
   const route = useRoute();
   const { width } = useWindowDimensions();
 
-  // ✅ 量内容区域真实宽度（避免平板先用错误宽度渲染）
+  // ✅ Measure the actual width of the content area (to avoid rendering the tablet with an incorrect width first)
   const [contentW, setContentW] = useState(0);
 
   const onContentLayout = useCallback((e) => {
@@ -387,7 +387,6 @@ export default memo(function MqttDeviceGridScreen() {
   const statusPendingRef = useRef('');
   const statusTimerRef = useRef(null);
   const fastTimerRef = useRef(null);
-// 在组件里加一个 ref
 const toggleLockRef = useRef(new Map()); // channelId → expireTimestamp
 const pendingToggleRef = useRef(new Map()); 
 // channelId -> { desired:'ON'|'OFF', expiresAt:number, okCount:number }
@@ -406,7 +405,7 @@ const pendingToggleRef = useRef(new Map());
       if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
     };
   }, []);
-  // ✅ 管理所有 setTimeout，断开时一键清掉
+  // ✅ Manage all setTimeouts and clear them with one click when disconnected
   const timeoutsRef = useRef(new Set());
 
   const safeSetTimeout = useCallback((fn, ms) => {
@@ -508,32 +507,32 @@ const pendingToggleRef = useRef(new Map());
   const old = prev[id] || (id >= 201 ? default3P(id) : default1P(id));
   let out = old;
 
-  // ✅ 1) 一开始就算锁（每个 id 自己算一次）
+  // ✅ 1) Calculate the lock at the beginning (each ID calculates it once).
   const lockExp = toggleLockRef.current.get(id) || 0;
   const isLocked = Date.now() < lockExp;
   const pend = pendingToggleRef.current.get(id);
 const isPending = !!(pend && Date.now() < pend.expiresAt);
-  // ✅ 锁定期内：如果这次 patch 只带 status（没有电流/其他信息），直接忽略
+  // ✅ During the lockout period: If this patch only includes status (without current/other information), ignore it.
 if (isLocked && partial && typeof partial === 'object') {
   const keys = Object.keys(partial);
   const hasCur = partial.__cur1p != null || partial.__cur3p != null;
 
-  // 只有 status 或（有 status 但没有电流）→ 锁定期不处理
+  // Only status or (status present but no current) → Lockout period not processed
   if (keys.length === 1 && keys[0] === 'status') {
     continue;
   }
   if (!hasCur && keys.includes('status')) {
-    // 后面合并 rest 时也会删 status，但这里提前拦截更干净
-    // 继续往下走也行；为了最稳，直接把 status 从 rest0 过滤即可（你已做）
+  // The status will also be deleted when merging rest later, but intercepting it in advance here is cleaner.
+// You can continue down the process; for the most stable approach, you can simply filter the status from rest0 (which you've already done).
   }
 }
 
-  // ✅ 2) 1相电流：用电流推导状态，但锁定期不改 status
+  // ✅ 2) Phase 1 current: The status is derived from the current, but the lockout period does not change the status.
  if (partial.__cur1p != null) {
   const curNum = Number(partial.__cur1p);
   if (Number.isFinite(curNum)) {
 
-    // ✅ pending：用 current 来确认是否已经到达目标状态
+    // ✅ pending: Use current to confirm whether the target state has been reached.
     if (isPending) {
       const desired = pend.desired;
       const ok = isCurrentConfirmStatusEBQ(curNum, desired);
@@ -541,28 +540,28 @@ if (isLocked && partial && typeof partial === 'object') {
       if (ok) pend.okCount += 1;
       else pend.okCount = 0;
 
-      // 连续两次确认 -> 完成
-      if (pend.okCount >= 2) {
+      // Confirm twice -> Done
+      if (pend.okCount >= 1) {
         pendingToggleRef.current.delete(id);
-        toggleLockRef.current.set(id, 0); // 可选：提前解除 lock
+        toggleLockRef.current.set(id, 0); // Optional: Release lock early
       } else {
-        // pending 未完成：强制 UI status = desired
+        // pending (not yet completed): force UI status = desired
         out = { ...out, status: desired };
       }
     }
 
-    // 电流数值永远更新
+   // Current value is updated forever
     out = {
       ...out,
       current: formatCurrentA(curNum),
       seen: true,
-      // ✅ 非 pending 才允许 status 跟随 current/锁逻辑
+      // ✅ Status is allowed to follow current/lock logic only if it is not pending.
       ...(isPending ? {} : (isLocked ? {} : { status: statusFromCurrentEBQ(curNum, out.status) })),
     };
   }
 }
 
-  // ✅ 3) 3相电流：同理
+  // ✅ 3) Three-phase current: Similarly
 if (partial.__cur3p != null) {
   const t = partial.__cur3p;
   if (Array.isArray(t) && t.length >= 3) {
@@ -586,7 +585,7 @@ if (partial.__cur3p != null) {
     }
   }
 }
-  // ✅ 4) 合并 rest，但锁定期禁止 rest.status 覆盖（关键：防闪）
+  // ✅ 4) Merge rest, but prevent rest.status from being overwritten during the lockout period (key: to prevent flashback)
   const { __cur1p, __cur3p, ...rest0 } = partial;
 
  let rest = rest0;
@@ -662,15 +661,10 @@ if ((isLocked || isPending) && rest0 && Object.prototype.hasOwnProperty.call(res
     });
   }, []);
 
-  const publishToBothTopics = useCallback(async (payload) => {
-    if (!topics.tSlash || !topics.tNoSlash) return;
-
-    //console.log('[PUB BOTH] topic1 (/)=', topics.tSlash);
-    await publishMqtt({ topic: topics.tSlash, payload, qos: 1, retained: false });
-
-    //console.log('[PUB BOTH] topic2 (no /)=', topics.tNoSlash);
-    await publishMqtt({ topic: topics.tNoSlash, payload, qos: 1, retained: false });
-  }, [topics.tSlash, topics.tNoSlash]);
+const publishToSlashTopic = useCallback(async (payload) => {
+  if (!topics.tSlash) return;
+  await publishMqtt({ topic: topics.tSlash, payload, qos: 1, retained: false });
+}, [topics.tSlash]);
 
   const publishControl = useCallback(async (payload) => {
 if (connectionStatusRef.current !== CONN.CONNECTED) return; // ✅ hard guard
@@ -740,9 +734,8 @@ const publishWrite = useCallback(async (payload) => {
       ...base,
       data: { ...base.data, command: ['Name2'], ackId: randomHex8() },
     });
-
-    await publishToBothTopics(p1);
-    await publishToBothTopics(p2);
+await publishToSlashTopic(p1);
+await publishToSlashTopic(p2);
 
   }, [topics.tSlash, topics.tNoSlash, derived.cpid, derived.deviceId, publishCfg]);
 
@@ -766,7 +759,7 @@ const publishWrite = useCallback(async (payload) => {
       },
     });
 
-    await publishToBothTopics(payload);
+    await publishToSlashTopic(payload);
   }, [topics.tSlash, topics.tNoSlash, derived.cpid, derived.deviceId, publishCfg]);
 
   // Send one time right after SUBSCRIBED
@@ -882,12 +875,12 @@ const publishWrite = useCallback(async (payload) => {
         username,
         password,
         topic: subTopic,
-        useTls: true,
+        useTls: useTls,
         onStatus: (s) => {
-          // ✅ 1) 先打印原始 status（最重要）
+          // ✅ 1) First print the original status (most important)
           console.log('[MQTT STATUS RAW]', s);
 
-          // ✅ 2) 再打印转换后的 msg（方便看 startsWith）
+          // ✅ 2) Print the converted message again (for easier viewing of startsWith)
           const msg = typeof s === 'string' ? s : JSON.stringify(s ?? '');
           console.log('[MQTT STATUS]', msg);
 
@@ -900,19 +893,19 @@ const publishWrite = useCallback(async (payload) => {
             return;
           }
 if (up.startsWith('SUBSCRIBED')) {
-  // ✅ 1) 立刻把 ref 设为 CONNECTED（避免 publishCfg 的 guard 挡住）
+  // ✅ 1) Immediately set the ref to CONNECTED (to avoid being blocked by publishCfg's guard).
   connectionStatusRef.current = CONN.CONNECTED;
   setConnectionStatus(CONN.CONNECTED);
 
   if (!didRequestCfgRef.current) {
     didRequestCfgRef.current = true;
 
-    // ✅ 2) 立刻发 fast interval（不延迟）
+    // ✅ 2) Send immediately with fast interval (no delay)
     stopFastIntervalTimer();
-    sendFastIntervalOnce();      // <-- 立刻发
-    startFastIntervalTimer();    // <-- 开启 58s 循环
+    sendFastIntervalOnce();      // <-- Send immediately
+    startFastIntervalTimer();    // <-- Start 58s loop
 
-    // ✅ 3) Name/Rating 可以继续立刻发，或稍微延迟都行
+    // ✅ 3) Name/Rating can send  immediately or delay it slightly.
     requestNameMap();
     requestRatingMap();
   }
@@ -938,7 +931,7 @@ if (up.startsWith('SUBSCRIBED')) {
           const rxTopic = String(m?.topic || '');
           setStatusTextSoft(`RX ${rxCountRef.current}  ${rxTopic.slice(-30)}`);
 
-          const text = m?.text ?? m;
+          const text = m?.text ?? m?.payload ?? m;   // ✅ Android 用 payload，iOS 可能用 text
           if (!text) return;
 
           let j = null;
@@ -1072,7 +1065,7 @@ if (act && ch != null) {
 const pend = pendingToggleRef.current.get(id);
 const pending = !!(pend && Date.now() < pend.expiresAt);
 
-// ✅ 锁定/等待确认期间都不要让 echo 改 status
+// ✅ Do not allow echo to change status during the lock/await confirmation period.
 if (!locked && !pending) {
   put(id, { status: act, seen: true });
 } else {
@@ -1239,7 +1232,7 @@ const disconnectNow = useCallback(async () => {
 
 useEffect(() => {
   const unsub = navigation.addListener('beforeRemove', () => {
-    // 离开这个 screen（返回/跳转/replace）都一定断线
+    // Leaving this screen (return/jump/replace) will always disconnect the connection.
     disconnectAndStop('beforeRemove');
   });
   return unsub;
@@ -1252,43 +1245,82 @@ useEffect(() => {
     };
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      if (didFocusInitRef.current) return () => { };
-      didFocusInitRef.current = true;
+  // useFocusEffect(
+  //   useCallback(() => {
+  //     if (didFocusInitRef.current) return () => { };
+  //     didFocusInitRef.current = true;
 
-      const t0 = Date.now();
-      console.log('[NAV] focus', t0);
+  //     const t0 = Date.now();
+  //     console.log('[NAV] focus', t0);
 
-      setUiReady(false);
-      // ✅ Load cached names immediately (does not block navigation animation)
-      loadNameCache({
-        cpid: derived.cpid,
-        deviceId: derived.deviceId,
-        setTags,
-      });
+  //     setUiReady(false);
+  //     // ✅ Load cached names immediately (does not block navigation animation)
+  //     loadNameCache({
+  //       cpid: derived.cpid,
+  //       deviceId: derived.deviceId,
+  //       setTags,
+  //     });
 
-      const task = InteractionManager.runAfterInteractions(() => {
-        const t1 = Date.now();
-        console.log('[NAV] afterInteractions', t1, 'cost=', t1 - t0);
+  //     const task = InteractionManager.runAfterInteractions(() => {
+  //       const t1 = Date.now();
+  //       console.log('[NAV] afterInteractions', t1, 'cost=', t1 - t0);
 
-        setUiReady(true);
+  //       setUiReady(true);
 
-        requestAnimationFrame(() => {
-          const t2 = Date.now();
-          console.log('[NAV] firstFrameAfterUiReady', t2, 'cost=', t2 - t0);
+  //       requestAnimationFrame(() => {
+  //         const t2 = Date.now();
+  //         console.log('[NAV] firstFrameAfterUiReady', t2, 'cost=', t2 - t0);
 
-          safeSetTimeout(() => {
-            const t3 = Date.now();
-            console.log('[MQTT] connectNow()', t3, 'cost=', t3 - t0);
-            connectNow();
-          }, 300);
-        });
-      });
+  //         safeSetTimeout(() => {
+  //           const t3 = Date.now();
+  //           console.log('[MQTT] connectNow()', t3, 'cost=', t3 - t0);
+  //           connectNow();
+  //         });
+  //       });
+  //     });
 
-      return () => task?.cancel?.();
-    }, [connectNow, derived.cpid, derived.deviceId])
-  );
+  //     return () => task?.cancel?.();
+  //   }, [connectNow, derived.cpid, derived.deviceId])
+  // );
+
+useFocusEffect(
+  useCallback(() => {
+    if (didFocusInitRef.current) return () => {};
+    didFocusInitRef.current = true;
+
+    const t0 = Date.now();
+    console.log('[NAV] focus', t0);
+
+    // 1) Mark UI ready immediately
+    setUiReady(true);
+
+    // 2) Load cached names immediately (non-blocking)
+    loadNameCache({
+      cpid: derived.cpid,
+      deviceId: derived.deviceId,
+      setTags,
+    });
+
+    // 3) Force initial DISCONNECTED state so user can see it first
+    connectionStatusRef.current = CONN.DISCONNECTED;
+    setConnectionStatus(CONN.DISCONNECTED);
+    setStatusTextSoft('DISCONNECTED');
+
+    // 4) Delay auto-connect so DISCONNECTED stays visible (0.5~1s)
+    safeSetTimeout(() => {
+      if (!didFocusInitRef.current) return;
+      connectNow();
+    }, 800);
+
+    // 5) afterInteractions only for non-critical logs/tasks
+    const task = InteractionManager.runAfterInteractions(() => {
+      const t1 = Date.now();
+      console.log('[NAV] afterInteractions', t1, 'cost=', t1 - t0);
+    });
+
+    return () => task?.cancel?.();
+  }, [connectNow, derived.cpid, derived.deviceId, safeSetTimeout, setStatusTextSoft])
+);
 
   //blur cleanup
 useFocusEffect(
@@ -1298,7 +1330,7 @@ useFocusEffect(
       console.log('[SCREEN] BLUR DeviceDetail');
       clearAllTimeouts();
       stopFastIntervalTimer();
-      // 不在 blur 做 disconnect，交给 beforeRemove 统一处理
+      // Instead of disconnecting during blur, handle it uniformly with beforeRemove.
     };
   }, [clearAllTimeouts, stopFastIntervalTimer])
 );
@@ -1307,7 +1339,7 @@ useFocusEffect(
 const handleToggle = useCallback((id, action) => {
   if (connectionStatus !== CONN.CONNECTED) return;
 
-  // ✅ 统一把 id 变成 number，避免 Map key 类型不一致
+  // ✅ Consistently change id to number to avoid inconsistent Map key types
   const channelId = Number(id);
   if (!Number.isFinite(channelId)) return;
 
@@ -1318,16 +1350,20 @@ const handleToggle = useCallback((id, action) => {
     patchTimerRef.current = null;
   }
 
-  const act = action === 'OFF' ? 'OFF' : 'ON';
-  const lockDuration = Platform.OS === 'android' ? 5000 : 3000;
+const act = action === 'OFF' ? 'OFF' : 'ON';
 
-  // ✅ Map 里只用数字 key
-  toggleLockRef.current.set(channelId, Date.now() + lockDuration);
+// ✅ Android 设备切换 + 回包可能更慢，锁久一点体验更稳
+const lockDuration = Platform.OS === 'android' ? 8000 : 5000;
+
+// ✅ Map uses only numeric keys
+toggleLockRef.current.set(channelId, Date.now() + lockDuration);
+
 pendingToggleRef.current.set(channelId, {
-  desired: act,                 // 'ON' or 'OFF'
-  expiresAt: Date.now() + 8000, // 最多等8秒确认
-  okCount: 0,
+  desired: act,                   // 'ON' or 'OFF'
+  expiresAt: Date.now() + 12000,  // ✅ 最多等 12 秒确认（避免太快解除导致“反弹”）
+  okCount: 0,                     // ✅ 一定要从 0 开始
 });
+
   // Instant UI feedback (no batching)
   applyTagPatchImmediate(channelId, { status: act, seen: true });
 
@@ -1342,7 +1378,7 @@ pendingToggleRef.current.set(channelId, {
         cpid,
         targetId: gatewayId,
         action: act,
-        channelId: channelId, // ✅ 用数字 channelId
+        channelId: channelId, 
         ackId: randomHex8(),
         useCPrefix: true,
       })
@@ -1350,7 +1386,7 @@ pendingToggleRef.current.set(channelId, {
 
     publishControl(payload).catch((e) => {
       toast(e?.message || String(e));
-      toggleLockRef.current.delete(channelId); // ✅ delete 也用数字
+      toggleLockRef.current.delete(channelId); 
       enqueueTagPatch({ [channelId]: { status: act === 'ON' ? 'OFF' : 'ON', seen: true } });
     });
   }, 0);
@@ -1409,9 +1445,8 @@ pendingToggleRef.current.set(channelId, {
     console.log('[PUB SetName B]', JSON.stringify(payloadObjB));
 
     // Optimistic UI: update via batched patch (avoid copying whole tags map)
-    enqueueTagPatch({
-      [channel]: { tagName: nameStr, seen: true },
-    });
+   applyTagPatchImmediate(channel, { tagName: nameStr, seen: true });
+
     // ✅ Save immediately so next time screen opens it shows instantly
     saveNameCache({
       cpid: derived.cpid,
@@ -1425,7 +1460,7 @@ pendingToggleRef.current.set(channelId, {
 
     // ✅ read back to confirm
     const bank = (channel >= 1 && channel <= 80) ? 'Name1' : 'Name2';
-    safeSetTimeout(() => requestNameBank(bank), 2500);
+    safeSetTimeout(() => requestNameBank(bank), 500);
 
 
     toast(`Set Name C${channel}`);
@@ -1440,7 +1475,7 @@ pendingToggleRef.current.set(channelId, {
       requestNameBank(bank);
     }, 8200);
 
-  }, [connectionStatus, derived.cpid, derived.deviceId, publishWrite, requestNameBank, enqueueTagPatch]);
+  }, [connectionStatus, derived.cpid, derived.deviceId, publishWrite, requestNameBank, applyTagPatchImmediate]);
 
 
   const publishSetRating = useCallback(async (ch, currentA, sensLevel) => {
@@ -1573,9 +1608,9 @@ pendingToggleRef.current.set(channelId, {
         animationType="none"
         onRequestClose={() => setShowMenu(false)}
       >
-        {/* 全屏点击关闭 */}
+        {/* Click to close in full screen*/}
         <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowMenu(false)}>
-          {/* 阻止点到菜单时关闭 */}
+          {/* Prevent closing when menu is clicked */}
           <Pressable
             onPress={() => { }}
             style={[
@@ -1677,7 +1712,7 @@ pendingToggleRef.current.set(channelId, {
                 connectionStatus={connectionStatus}
                 onToggle={handleToggle}
                 onSelect={onSelectNoop}
-                layoutWidth={contentW}   // ✅关键：传真实宽度
+                layoutWidth={contentW}   // ✅Key: Transmit the actual width
               />
             </View>
 
