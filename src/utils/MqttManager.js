@@ -48,14 +48,14 @@ function scheduleReconnect() {
   const delay = Math.min(30000, 1000 * Math.pow(2, retryCount)); // 1s,2s,4s... max 30s
   reconnectTimer = setTimeout(() => {
     retryCount += 1;
-    connectDevice(currentDevice, { silent: true }).catch(() => {});
+    connectDevice(currentDevice, { silent: true }).catch(() => { });
   }, delay);
 }
 
 // ✅ Auto detect TLS by port
 function detectTlsByPort(port) {
   const p = Number(port);
-  return p === 8883  || p === 8812;   // ✅ TLS ports
+  return p === 8883 || p === 8812;   // ✅ TLS ports
 }
 // ---- Topic builders based on your MQTT Explorer ----
 const DEFAULT_CPID = '51c5c752';
@@ -114,7 +114,7 @@ export async function authenticateForAddDevice({
 
   // Try once: disconnect -> connect -> subscribe (with timeout)
   const tryOnce = async (tlsFlag) => {
-    await disconnectMqtt().catch(() => {});
+    await disconnectMqtt().catch(() => { });
     await withTimeout(
       connectAndSubscribe({
         host: host.trim(),
@@ -123,9 +123,9 @@ export async function authenticateForAddDevice({
         password: String(password || ''),
         topic: subTopic,
         useTls: tlsFlag,
-        onStatus: () => {},
-        onMessage: () => {},
-        onError: () => {},
+        onStatus: () => { },
+        onMessage: () => { },
+        onError: () => { },
       }),
       timeoutMs,
       'Auth timeout: check network/host/port/username/password/ACL'
@@ -161,7 +161,7 @@ export async function authenticateForAddDevice({
     }
   } finally {
     // Auth-test only: disconnect after success/failure
-    await disconnectMqtt().catch(() => {});
+    await disconnectMqtt().catch(() => { });
   }
 
   // ✅ Return detected TLS so AddMqttDevice can store it
@@ -183,11 +183,11 @@ export async function connectDevice(device, { silent = false } = {}) {
   const deviceId = String(device.deviceId ?? device.id ?? device.friendlyName ?? '');
   const port = Number(device.port) || 1883;
 
- // ✅ Prioritize using the device-saved useTls (if available), otherwise infer from the port.
-const useTls =
-  typeof device.useTls === 'boolean'
-    ? device.useTls
-    : detectTlsByPort(port);
+  // ✅ Prioritize using the device-saved useTls (if available), otherwise infer from the port.
+  const useTls =
+    typeof device.useTls === 'boolean'
+      ? device.useTls
+      : detectTlsByPort(port);
   const scheme = useTls ? 'ssl' : 'tcp';
 
   setState({
@@ -199,7 +199,7 @@ const useTls =
   });
 
   // Disconnect previous session before connecting a new one
-  await disconnectMqtt().catch(() => {});
+  await disconnectMqtt().catch(() => { });
 
   try {
     await connectAndSubscribe({
@@ -261,7 +261,7 @@ export async function disconnectDevice() {
     currentDevice = null;
     retryCount = 0;
 
-    await disconnectMqtt().catch(() => {});
+    await disconnectMqtt().catch(() => { });
   } finally {
     setState({
       deviceId: null,

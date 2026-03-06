@@ -25,9 +25,9 @@ export default function App() {
       password: 'myEBQ_dk',
       useTls: true,
       // topic: '#', // 先别订阅，先确认能 CONNECTED
-    onStatus: (status: any) => console.log('STATUS:', status),
-onMessage: (message: any) => console.log('MESSAGE:', message),
-onError: (err: any) => console.log('ERROR:', err),
+      onStatus: (status: any) => console.log('STATUS:', status),
+      onMessage: (message: any) => console.log('MESSAGE:', message),
+      onError: (err: any) => console.log('ERROR:', err),
     });
   }, []);
 

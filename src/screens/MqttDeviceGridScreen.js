@@ -28,7 +28,13 @@ const CONN = {
   DISCONNECTING: 'disconnecting',
 };
 
-const toast = (msg) => ToastAndroid.show(String(msg ?? ''), ToastAndroid.SHORT);
+const toast = (msg) => {
+  if (Platform.OS === 'android') {
+    ToastAndroid.show(String(msg ?? ''), ToastAndroid.SHORT);
+  } else {
+    console.log('[TOAST]', msg);
+  }
+};
 
 function getStatusColor(status) {
   const s = String(status || '').toLowerCase();
@@ -56,6 +62,7 @@ function extractNameMap(j) {
     j?.d?.Name ||
     j?.d?.Name1 ||
     j?.d?.Name2 ||
+    j?.data?.Name ||
     j?.data?.Name ||
     j?.data?.Name1 ||
     j?.data?.Name2 ||
@@ -118,28 +125,25 @@ function statusFromCurrentEBQ(cur, prevStatus) {
   const n = Number(cur);
   if (!Number.isFinite(n)) return prevStatus || 'UNKNOWN';
 
-// The value closer to OFF(-0.1) or ON(0) is considered the one that determines the value.
   const dOff = Math.abs(n - (-0.1));
-  const dOn  = Math.abs(n - 0);
+  const dOn = Math.abs(n - 0);
+  const FAR = 0.2;
 
-  // ✅ Prevent extreme noise: If far from both, maintain the original state
-// For example, n = -0.5 or 2.3, these are not protocol values
-  const FAR = 0.2; //  can adjust it to smaller/larger
-  if (Math.min(dOff, dOn) > FAR) return prevStatus || 'ON';
+  // ✅ 关键修复：如果电流 > 0.2A，说明有负载，一定是 ON
+  if (n > 0.2) return 'ON';
+
+  if (Math.min(dOff, dOn) > FAR) return prevStatus === 'UNKNOWN' ? 'ON' : (prevStatus || 'ON');
 
   return dOff < dOn ? 'OFF' : 'ON';
 }
 
 function sanitizeName(input) {
   const s = String(input ?? '').trim();
-
-  // Remove replacement char (�) and control chars
   const cleaned = s
-    .replace(/\uFFFD/g, '')              // �
-    .replace(/[\u0000-\u001F\u007F]/g, '') // control chars
+    .replace(/\uFFFD/g, '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/`[A-Z]/g, '')              // ✅ 去掉 `H `M 这类乱码尾巴
     .trim();
-
-  // If result is empty or still looks broken, return empty to skip apply
   if (!cleaned) return '';
   return cleaned;
 }
@@ -302,13 +306,11 @@ function isCurrentConfirmStatusEBQ(cur, desired) {
   const n = Number(cur);
   if (!Number.isFinite(n)) return false;
 
-// Your device: OFF = -0.1, ON = 0
-
- const OFF_MIN = -0.20, OFF_MAX = -0.05;
-const ON_MIN  = -0.05, ON_MAX  = 0.08;
-
-  if (desired === 'OFF') return n >= OFF_MIN && n <= OFF_MAX;
-  return n >= ON_MIN && n <= ON_MAX;
+  // ✅ 不要用 -0.1/0 这种“协议值”来确认
+  // 你的现场：有负载时 current 会是 0.23/0.90/8.36…
+  // 所以用更宽松的确认方式：
+  if (desired === 'OFF') return n <= 0.05;   // OFF: 允许 0~0.05
+  return n >= 0;                              // ON: 任何 >=0 都算
 }
 
 export default memo(function MqttDeviceGridScreen() {
@@ -351,6 +353,14 @@ export default memo(function MqttDeviceGridScreen() {
   }, []);
 
   const device = route.params?.device || route.params || {};
+  const bleDevice = route.params?.bleDevice || null;
+  const effectiveBleDevice = bleDevice || (device.deviceId ? {
+    id: device.deviceId,
+    advName: device.friendlyName || device.name || 'EBQ',
+  } : null);
+  console.log('[SWITCH BLE] bleDevice =', bleDevice);
+  console.log('[SWITCH BLE] device =', JSON.stringify(device));
+  console.log('[SWITCH BLE] effectiveBleDevice =', JSON.stringify(effectiveBleDevice));
   const host = String(device.host || device.brokerHost || '').trim();
   const port = Number(device.port || 0);
   const username = String(device.username || '');
@@ -365,7 +375,6 @@ export default memo(function MqttDeviceGridScreen() {
 
     return {
       tSlash: `devices/${cpid}/${id}/messages/events/`,
-      tNoSlash: `devices/${cpid}/${id}/messages/events`,
 
     };
   }, [derived.cpid, derived.deviceId]);
@@ -386,10 +395,11 @@ export default memo(function MqttDeviceGridScreen() {
   // ===== perf: throttle statusText (avoid re-render per message) =====
   const statusPendingRef = useRef('');
   const statusTimerRef = useRef(null);
+  const isSwitchingToBleRef = useRef(false);
   const fastTimerRef = useRef(null);
-const toggleLockRef = useRef(new Map()); // channelId → expireTimestamp
-const pendingToggleRef = useRef(new Map()); 
-// channelId -> { desired:'ON'|'OFF', expiresAt:number, okCount:number }
+  const toggleLockRef = useRef(new Map()); // channelId → expireTimestamp
+  const pendingToggleRef = useRef(new Map());
+  // channelId -> { desired:'ON'|'OFF', expiresAt:number, okCount:number }
   const setStatusTextSoft = useCallback((s) => {
     statusPendingRef.current = String(s ?? '');
     if (statusTimerRef.current) return;
@@ -440,9 +450,9 @@ const pendingToggleRef = useRef(new Map());
   const didFocusInitRef = useRef(false);
   const rxCountRef = useRef(0);
   const didRequestCfgRef = useRef(false);
-  const didSendFastIntervalRef = useRef(false); // ✅ fast interval 只发一次
+  const didSendFastIntervalRef = useRef(false); // ✅ fast interval send once time
   const nameLockRef = useRef(new Map()); // channelId -> expireTimestampMs
-  const lastGetNameAckRef = useRef({ a1: '', a2: '' }); // track latest Name1/Name2 ackId
+  const lastGetNameAckRef = useRef({ a1: '', a2: '' }); // track latartartest Name1/Name2 ackId
   // ✅ Apply Name map into tags (device confirmed names)
   const pendingNameRef = useRef(new Map());   // channelId -> { value, expiresAt }
   const pendingRatingRef = useRef(new Map()); // channelId -> { value:[cur,sens], expiresAt }
@@ -501,112 +511,111 @@ const pendingToggleRef = useRef(new Map());
         let didChange = false;
 
         for (const [idStr, partial] of Object.entries(batch)) {
-  const id = Number(idStr);
-  if (!Number.isFinite(id)) continue;
+          const id = Number(idStr);
+          if (!Number.isFinite(id)) continue;
 
-  const old = prev[id] || (id >= 201 ? default3P(id) : default1P(id));
-  let out = old;
+          const old = prev[id] || (id >= 201 ? default3P(id) : default1P(id));
+          let out = old;
 
-  // ✅ 1) Calculate the lock at the beginning (each ID calculates it once).
-  const lockExp = toggleLockRef.current.get(id) || 0;
-  const isLocked = Date.now() < lockExp;
-  const pend = pendingToggleRef.current.get(id);
-const isPending = !!(pend && Date.now() < pend.expiresAt);
-  // ✅ During the lockout period: If this patch only includes status (without current/other information), ignore it.
-if (isLocked && partial && typeof partial === 'object') {
-  const keys = Object.keys(partial);
-  const hasCur = partial.__cur1p != null || partial.__cur3p != null;
+          // ✅ 1) Calculate the lock at the beginning (each ID calculates it once).
+          const lockExp = toggleLockRef.current.get(id) || 0;
+          const isLocked = Date.now() < lockExp;
+          const pend = pendingToggleRef.current.get(id);
+          const isPending = !!(pend && Date.now() < pend.expiresAt);
+          // ✅ During the lockout period: If this patch only includes status (without current/other information), ignore it.
+          if (isLocked && partial && typeof partial === 'object') {
+            const keys = Object.keys(partial);
+            const hasCur = partial.__cur1p != null || partial.__cur3p != null;
 
-  // Only status or (status present but no current) → Lockout period not processed
-  if (keys.length === 1 && keys[0] === 'status') {
-    continue;
-  }
-  if (!hasCur && keys.includes('status')) {
-  // The status will also be deleted when merging rest later, but intercepting it in advance here is cleaner.
-// You can continue down the process; for the most stable approach, you can simply filter the status from rest0 (which you've already done).
-  }
-}
+            // Only status or (status present but no current) → Lockout period not processed
+            if (keys.length === 1 && keys[0] === 'status') {
+              continue;
+            }
+            if (!hasCur && keys.includes('status')) {
+              // The status will also be deleted when merging rest later, but intercepting it in advance here is cleaner.
+              // You can continue down the process; for the most stable approach, you can simply filter the status from rest0 (which you've already done).
+            }
+          }
 
-  // ✅ 2) Phase 1 current: The status is derived from the current, but the lockout period does not change the status.
- if (partial.__cur1p != null) {
-  const curNum = Number(partial.__cur1p);
-  if (Number.isFinite(curNum)) {
+          // ✅ 2) Phase 1 current
+          if (partial.__cur1p != null) {
+            const curNum = Number(partial.__cur1p);
+            if (Number.isFinite(curNum)) {
 
-    // ✅ pending: Use current to confirm whether the target state has been reached.
-    if (isPending) {
-      const desired = pend.desired;
-      const ok = isCurrentConfirmStatusEBQ(curNum, desired);
+              if (isPending) {
+                const desired = pend.desired;
+                pendingToggleRef.current.delete(id);
+                // ✅ 给2秒缓冲（比之前的1秒更安全）
+                toggleLockRef.current.set(id, Date.now() + 5000);
 
-      if (ok) pend.okCount += 1;
-      else pend.okCount = 0;
+                out = { ...out, status: desired };
+              }
+              
 
-      // Confirm twice -> Done
-      if (pend.okCount >= 1) {
-        pendingToggleRef.current.delete(id);
-        toggleLockRef.current.set(id, 0); // Optional: Release lock early
-      } else {
-        // pending (not yet completed): force UI status = desired
-        out = { ...out, status: desired };
-      }
-    }
+              // ✅ 重新读取 isLocked（因为上面刚刚更新了 toggleLockRef）
+              const isLockedNow = Date.now() < (toggleLockRef.current.get(id) || 0);
 
-   // Current value is updated forever
-    out = {
-      ...out,
-      current: formatCurrentA(curNum),
-      seen: true,
-      // ✅ Status is allowed to follow current/lock logic only if it is not pending.
-      ...(isPending ? {} : (isLocked ? {} : { status: statusFromCurrentEBQ(curNum, out.status) })),
-    };
-  }
-}
+              out = {
+                ...out,
+                current: formatCurrentA(curNum),
+                seen: true,
+                // ✅ 用 isLockedNow 而不是旧的 isLocked
+                ...(isPending ? {} : (isLockedNow ? {} : { status: statusFromCurrentEBQ(curNum, out.status) })),
+              };
+            }
+          }
 
-  // ✅ 3) Three-phase current: Similarly
-if (partial.__cur3p != null) {
-  const t = partial.__cur3p;
-  if (Array.isArray(t) && t.length >= 3) {
-    const a = Number(t[0]), b = Number(t[1]), c = Number(t[2]);
-    if ([a, b, c].every(Number.isFinite)) {
+          // ✅ 3) Three-phase current
+          if (partial.__cur3p != null) {
+            const t = partial.__cur3p;
+            if (Array.isArray(t) && t.length >= 3) {
+              const a = Number(t[0]), b = Number(t[1]), c = Number(t[2]);
+              if ([a, b, c].every(Number.isFinite)) {
 
-      const aSt = statusFromCurrentEBQ(a, out.status);
-      const bSt = statusFromCurrentEBQ(b, out.status);
-      const cSt = statusFromCurrentEBQ(c, out.status);
-      const statusFromCur = (aSt === 'OFF' || bSt === 'OFF' || cSt === 'OFF') ? 'OFF' : 'ON';
+                // ✅ 重新读取 isLocked
+                const isLockedNow = Date.now() < (toggleLockRef.current.get(id) || 0);
 
-      out = {
-        ...out,
-        seen: true,
-        current: formatCurrentA(a),
-        current1: formatCurrentA(a),
-        current2: formatCurrentA(b),
-        current3: formatCurrentA(c),
-        ...(isLocked ? {} : { status: statusFromCur }),
-      };
-    }
-  }
-}
-  // ✅ 4) Merge rest, but prevent rest.status from being overwritten during the lockout period (key: to prevent flashback)
-  const { __cur1p, __cur3p, ...rest0 } = partial;
+                const aSt = statusFromCurrentEBQ(a, out.status);
+                const bSt = statusFromCurrentEBQ(b, out.status);
+                const cSt = statusFromCurrentEBQ(c, out.status);
+                const statusFromCur = (aSt === 'OFF' || bSt === 'OFF' || cSt === 'OFF') ? 'OFF' : 'ON';
 
- let rest = rest0;
-if ((isLocked || isPending) && rest0 && Object.prototype.hasOwnProperty.call(rest0, 'status')) {
-  rest = { ...rest0 };
-  delete rest.status;
-}
-  
+                out = {
+                  ...out,
+                  seen: true,
+                  current: formatCurrentA(a),
+                  current1: formatCurrentA(a),
+                  current2: formatCurrentA(b),
+                  current3: formatCurrentA(c),
+                  // ✅ 用 isLockedNow
+                  ...(isLockedNow ? {} : { status: statusFromCur }),
+                };
+              }
+            }
+          }
 
-  if (rest && Object.keys(rest).length > 0) {
-    out = { ...out, ...rest };
-  }
+          // ✅ 4) Merge rest, but prevent rest.status from being overwritten during the lockout period (key: to prevent flashback)
+          const { __cur1p, __cur3p, ...rest0 } = partial;
 
-  if (out === old) continue;
+          let rest = rest0;
+          if ((isLocked || isPending) && rest0 && Object.prototype.hasOwnProperty.call(rest0, 'status')) {
+            rest = { ...rest0 };
+            delete rest.status;
+          }
 
-  if (!didChange) {
-    next = { ...prev };
-    didChange = true;
-  }
-  next[id] = out;
-}
+
+          if (rest && Object.keys(rest).length > 0) {
+            out = { ...out, ...rest };
+          }
+
+          if (out === old) continue;
+
+          if (!didChange) {
+            next = { ...prev };
+            didChange = true;
+          }
+          next[id] = out;
+        }
 
         return didChange ? next : prev;
       });
@@ -661,30 +670,30 @@ if ((isLocked || isPending) && rest0 && Object.prototype.hasOwnProperty.call(res
     });
   }, []);
 
-const publishToSlashTopic = useCallback(async (payload) => {
-  if (!topics.tSlash) return;
-  await publishMqtt({ topic: topics.tSlash, payload, qos: 1, retained: false });
-}, [topics.tSlash]);
+  const publishToSlashTopic = useCallback(async (payload) => {
+    if (!topics.tSlash) return;
+    await publishMqtt({ topic: topics.tSlash, payload, qos: 1, retained: false });
+  }, [topics.tSlash]);
 
   const publishControl = useCallback(async (payload) => {
-if (connectionStatusRef.current !== CONN.CONNECTED) return; // ✅ hard guard
-  if (!topics.tSlash) return;
-  await publishMqtt({ topic: topics.tSlash, payload, qos: 1, retained: false });
-}, [topics.tSlash]);
+    if (connectionStatusRef.current !== CONN.CONNECTED) return; // ✅ hard guard
+    if (!topics.tSlash) return;
+    await publishMqtt({ topic: topics.tSlash, payload, qos: 1, retained: false });
+  }, [topics.tSlash]);
 
-const publishCfg = useCallback(async (payload) => {
-  if (connectionStatusRef.current !== CONN.CONNECTED) return; // ✅ hard guard
-  if (!topics.tSlash) return;
-  if (typeof payload === 'string' && payload.includes('fast interval')) {
-  console.log('[APP PUB fast interval]', new Date().toISOString(), topics.tSlash);
-}
-  await publishMqtt({ topic: topics.tSlash, payload, qos: 1, retained: false });
-}, [topics.tSlash]);
-const publishWrite = useCallback(async (payload) => {
-  if (connectionStatusRef.current !== CONN.CONNECTED) return;
-  if (!topics.tSlash) return;
-  await publishMqtt({ topic: topics.tSlash, payload, qos: 0, retained: false });
-}, [topics.tSlash]);
+  const publishCfg = useCallback(async (payload) => {
+    if (connectionStatusRef.current !== CONN.CONNECTED) return; // ✅ hard guard
+    if (!topics.tSlash) return;
+    if (typeof payload === 'string' && payload.includes('fast interval')) {
+      console.log('[APP PUB fast interval]', new Date().toISOString(), topics.tSlash);
+    }
+    await publishMqtt({ topic: topics.tSlash, payload, qos: 1, retained: false });
+  }, [topics.tSlash]);
+  const publishWrite = useCallback(async (payload) => {
+    if (connectionStatusRef.current !== CONN.CONNECTED) return;
+    if (!topics.tSlash) return;
+    await publishMqtt({ topic: topics.tSlash, payload, qos: 0, retained: false });
+  }, [topics.tSlash]);
 
   const requestNameBank = useCallback(async (bank) => {
     if (!topics.tSlash) return;
@@ -734,8 +743,8 @@ const publishWrite = useCallback(async (payload) => {
       ...base,
       data: { ...base.data, command: ['Name2'], ackId: randomHex8() },
     });
-await publishToSlashTopic(p1);
-await publishToSlashTopic(p2);
+    await publishToSlashTopic(p1);
+    await publishToSlashTopic(p2);
 
   }, [topics.tSlash, topics.tNoSlash, derived.cpid, derived.deviceId, publishCfg]);
 
@@ -892,25 +901,25 @@ await publishToSlashTopic(p2);
             setConnectionStatus(CONN.CONNECTING);
             return;
           }
-if (up.startsWith('SUBSCRIBED')) {
-  // ✅ 1) Immediately set the ref to CONNECTED (to avoid being blocked by publishCfg's guard).
-  connectionStatusRef.current = CONN.CONNECTED;
-  setConnectionStatus(CONN.CONNECTED);
+          if (up.startsWith('SUBSCRIBED')) {
+            // ✅ 1) Immediately set the ref to CONNECTED (to avoid being blocked by publishCfg's guard).
+            connectionStatusRef.current = CONN.CONNECTED;
+            setConnectionStatus(CONN.CONNECTED);
 
-  if (!didRequestCfgRef.current) {
-    didRequestCfgRef.current = true;
+            if (!didRequestCfgRef.current) {
+              didRequestCfgRef.current = true;
 
-    // ✅ 2) Send immediately with fast interval (no delay)
-    stopFastIntervalTimer();
-    sendFastIntervalOnce();      // <-- Send immediately
-    startFastIntervalTimer();    // <-- Start 58s loop
+              // ✅ 2) Send immediately with fast interval (no delay)
+              stopFastIntervalTimer();
+              sendFastIntervalOnce();      // <-- Send immediately
+              startFastIntervalTimer();    // <-- Start 58s loop
 
-    // ✅ 3) Name/Rating can send  immediately or delay it slightly.
-    requestNameMap();
-    requestRatingMap();
-  }
-  return;
-}
+              // ✅ 3) Name/Rating can send  immediately or delay it slightly.
+              requestNameMap();
+              requestRatingMap();
+            }
+            return;
+          }
 
           if (up.startsWith('DISCONNECTED')) {
             console.log('[MQTT STATUS] DISCONNECTED event');
@@ -937,10 +946,19 @@ if (up.startsWith('SUBSCRIBED')) {
           let j = null;
           try {
             j = typeof text === 'string' ? JSON.parse(text) : text;
+            // 在 onMessage 里，JSON.parse 之后立刻加：
+            console.log('[RX] cmdType=', j?.cmdType ?? j?.d?.cmdType,
+              'hasName=', !!(j?.d?.Name || j?.d?.Name1 || j?.d?.Name2 || j?.data?.Name || j?.data?.Name1 || j?.data?.Name2),
+              'keys=', Object.keys(j?.d || j?.data || {}).slice(0, 5));
           } catch (_) {
             return;
           }
-          const cmdType = String(j?.cmdType ?? '');
+          // ✅ 加在这里，parse之后最早的位置
+          console.log('[MSG DUMP]', JSON.stringify(j).slice(0, 300));
+          console.log('[MSG cmdType]', j?.cmdType, '/', j?.d?.cmdType);
+          console.log('[MSG d.Name]', JSON.stringify(j?.d?.Name)?.slice(0, 100));
+          console.log('[MSG data.Name]', JSON.stringify(j?.data?.Name)?.slice(0, 100));
+          const cmdType = String(j?.cmdType ?? j?.d?.cmdType ?? j?.data?.cmdType ?? '');
           const hasCurrent = !!(j?.d?.current || j?.data?.current || j?.current);
           const nameMap2 = extractNameMap(j);   // compute once
           // if (__DEV__ && nameMap2) {
@@ -953,9 +971,12 @@ if (up.startsWith('SUBSCRIBED')) {
             !!(j?.d?.Rating || j?.data?.Rating || j?.d?.command?.Rating || j?.data?.command?.Rating);
 
           // If message has nothing we care, skip heavy parsing
-          if (!hasCurrent && !hasName && !hasRating && cmdType !== '1' && cmdType !== '4' && cmdType !== '5') {
-            return;
-          }
+          const hasAnything = hasCurrent || hasName || hasRating ||
+            !!(j?.d?.Name || j?.d?.Name1 || j?.d?.Name2 || j?.d?.Rating) ||
+            cmdType === '1' || cmdType === '4' || cmdType === '5';
+
+          if (!hasAnything) return;
+
 
           const patch = {};
           const put = (id, partial) => {
@@ -1056,23 +1077,23 @@ if (up.startsWith('SUBSCRIBED')) {
 
             const act = onVal != null ? 'ON' : offVal != null ? 'OFF' : null;
             const ch = onVal ?? offVal;
-if (act && ch != null) {
-  const m3 = String(ch ?? '').match(/C(\d+)/i);
-  const id = m3 ? parseInt(m3[1], 10) : parseInt(ch, 10);
-  if (Number.isFinite(id)) {
-    const exp = toggleLockRef.current.get(id) || 0;
-    const locked = Date.now() < exp;
-const pend = pendingToggleRef.current.get(id);
-const pending = !!(pend && Date.now() < pend.expiresAt);
+            if (act && ch != null) {
+              const m3 = String(ch ?? '').match(/C(\d+)/i);
+              const id = m3 ? parseInt(m3[1], 10) : parseInt(ch, 10);
+              if (Number.isFinite(id)) {
+                const exp = toggleLockRef.current.get(id) || 0;
+                const locked = Date.now() < exp;
+                const pend = pendingToggleRef.current.get(id);
+                const pending = !!(pend && Date.now() < pend.expiresAt);
 
-// ✅ Do not allow echo to change status during the lock/await confirmation period.
-if (!locked && !pending) {
-  put(id, { status: act, seen: true });
-} else {
-  put(id, { seen: true });
-}
-  }
-}
+                // ✅ Do not allow echo to change status during the lock/await confirmation period.
+                if (!locked && !pending) {
+                  put(id, { status: act, seen: true });
+                } else {
+                  put(id, { seen: true });
+                }
+              }
+            }
             // 3b) Set Name echo
             for (const one of cmdList) {
               const setNameObj = one?.['Set Name'];
@@ -1194,49 +1215,49 @@ if (!locked && !pending) {
   ]);
 
   const disconnectAndStop = useCallback(async (reason) => {
-  console.log('[DISCONNECT]', reason);
+    console.log('[DISCONNECT]', reason);
 
-  // 1) cancel all pending timeouts (80ms/2500ms/8200ms...)
-  clearAllTimeouts();
+    // 1) cancel all pending timeouts (80ms/2500ms/8200ms...)
+    clearAllTimeouts();
 
-  // 2) stop fast timer
-  stopFastIntervalTimer();
+    // 2) stop fast timer
+    stopFastIntervalTimer();
 
-  // 3) update UI state to block any publish immediately
-  setConnectionStatus(CONN.DISCONNECTING);
-  setStatusTextSoft('DISCONNECTING');
+    // 3) update UI state to block any publish immediately
+    setConnectionStatus(CONN.DISCONNECTING);
+    setStatusTextSoft('DISCONNECTING');
 
-  try {
-    await disconnectMqtt();
-    console.log('[DISCONNECT] disconnectMqtt done');
-  } catch (e) {
-    console.log('[DISCONNECT] disconnectMqtt error', e?.message || String(e));
-  } finally {
-    setConnectionStatus(CONN.DISCONNECTED);
-    setStatusTextSoft('DISCONNECTED');
+    try {
+      await disconnectMqtt();
+      console.log('[DISCONNECT] disconnectMqtt done');
+    } catch (e) {
+      console.log('[DISCONNECT] disconnectMqtt error', e?.message || String(e));
+    } finally {
+      setConnectionStatus(CONN.DISCONNECTED);
+      setStatusTextSoft('DISCONNECTED');
+      clearTagsToUnknown();
+      didRequestCfgRef.current = false;
+      didSendFastIntervalRef.current = false;
+    }
+  }, [
+    clearAllTimeouts,
+    stopFastIntervalTimer,
+    setStatusTextSoft,
+  ]);
 
-    didRequestCfgRef.current = false;
-    didSendFastIntervalRef.current = false;
-  }
-}, [
-  clearAllTimeouts,
-  stopFastIntervalTimer,
-  setStatusTextSoft,
-]);
+  const disconnectNow = useCallback(async () => {
+    if (isBusy) return;
+    await disconnectAndStop('menuDisconnect');
+    clearTagsToUnknown();
+  }, [isBusy, disconnectAndStop, clearTagsToUnknown]);
 
-const disconnectNow = useCallback(async () => {
-  if (isBusy) return;
-  await disconnectAndStop('menuDisconnect');
-  clearTagsToUnknown();
-}, [isBusy, disconnectAndStop, clearTagsToUnknown]);
-
-useEffect(() => {
-  const unsub = navigation.addListener('beforeRemove', () => {
-    // Leaving this screen (return/jump/replace) will always disconnect the connection.
-    disconnectAndStop('beforeRemove');
-  });
-  return unsub;
-}, [navigation, disconnectAndStop]);
+  useEffect(() => {
+    const unsub = navigation.addListener('beforeRemove', () => {
+      if (isSwitchingToBleRef.current) return; // ✅ 切 BLE 时不阻塞
+      disconnectAndStop('beforeRemove');
+    });
+    return unsub;
+  }, [navigation, disconnectAndStop]);
 
   useEffect(() => {
     return () => {
@@ -1283,114 +1304,110 @@ useEffect(() => {
   //   }, [connectNow, derived.cpid, derived.deviceId])
   // );
 
-useFocusEffect(
-  useCallback(() => {
-    if (didFocusInitRef.current) return () => {};
-    didFocusInitRef.current = true;
+  useFocusEffect(
+    useCallback(() => {
+      if (didFocusInitRef.current) return () => { };
+      didFocusInitRef.current = true;
 
-    const t0 = Date.now();
-    console.log('[NAV] focus', t0);
+      const t0 = Date.now();
+      console.log('[NAV] focus', t0);
 
-    // 1) Mark UI ready immediately
-    setUiReady(true);
+      // 1) Mark UI ready immediately
+      setUiReady(true);
 
-    // 2) Load cached names immediately (non-blocking)
-    loadNameCache({
-      cpid: derived.cpid,
-      deviceId: derived.deviceId,
-      setTags,
-    });
+      // 2) Load cached names immediately (non-blocking)
+      loadNameCache({
+        cpid: derived.cpid,
+        deviceId: derived.deviceId,
+        setTags,
+      });
 
-    // 3) Force initial DISCONNECTED state so user can see it first
-    connectionStatusRef.current = CONN.DISCONNECTED;
-    setConnectionStatus(CONN.DISCONNECTED);
-    setStatusTextSoft('DISCONNECTED');
+      // 3) Force initial DISCONNECTED state so user can see it first
+      connectionStatusRef.current = CONN.DISCONNECTED;
+      setConnectionStatus(CONN.DISCONNECTED);
+      setStatusTextSoft('DISCONNECTED');
 
-    // 4) Delay auto-connect so DISCONNECTED stays visible (0.5~1s)
-    safeSetTimeout(() => {
-      if (!didFocusInitRef.current) return;
-      connectNow();
-    }, 800);
+      // 4) Delay auto-connect so DISCONNECTED stays visible (0.5~1s)
+      safeSetTimeout(() => {
+        if (!didFocusInitRef.current) return;
+        connectNow();
+      }, 800);
 
-    // 5) afterInteractions only for non-critical logs/tasks
-    const task = InteractionManager.runAfterInteractions(() => {
-      const t1 = Date.now();
-      console.log('[NAV] afterInteractions', t1, 'cost=', t1 - t0);
-    });
+      // 5) afterInteractions only for non-critical logs/tasks
+      const task = InteractionManager.runAfterInteractions(() => {
+        const t1 = Date.now();
+        console.log('[NAV] afterInteractions', t1, 'cost=', t1 - t0);
+      });
 
-    return () => task?.cancel?.();
-  }, [connectNow, derived.cpid, derived.deviceId, safeSetTimeout, setStatusTextSoft])
-);
+      return () => task?.cancel?.();
+    }, [connectNow, derived.cpid, derived.deviceId, safeSetTimeout, setStatusTextSoft])
+  );
 
   //blur cleanup
-useFocusEffect(
-  useCallback(() => {
-    console.log('[SCREEN] FOCUS DeviceDetail');
-    return () => {
-      console.log('[SCREEN] BLUR DeviceDetail');
-      clearAllTimeouts();
-      stopFastIntervalTimer();
-      // Instead of disconnecting during blur, handle it uniformly with beforeRemove.
-    };
-  }, [clearAllTimeouts, stopFastIntervalTimer])
-);
+  useFocusEffect(
+    useCallback(() => {
+      console.log('[SCREEN] FOCUS DeviceDetail');
+      return () => {
+        console.log('[SCREEN] BLUR DeviceDetail');
+        clearAllTimeouts();
+        stopFastIntervalTimer();
+        // Instead of disconnecting during blur, handle it uniformly with beforeRemove.
+      };
+    }, [clearAllTimeouts, stopFastIntervalTimer])
+  );
 
-// ===== Publish commands =====
-const handleToggle = useCallback((id, action) => {
-  if (connectionStatus !== CONN.CONNECTED) return;
+  // ===== Publish commands =====
+  const handleToggle = useCallback((id, action) => {
+    if (connectionStatus !== CONN.CONNECTED) return;
 
-  // ✅ Consistently change id to number to avoid inconsistent Map key types
-  const channelId = Number(id);
-  if (!Number.isFinite(channelId)) return;
+    const channelId = Number(id);
+    if (!Number.isFinite(channelId)) return;
 
-  // Give touch events priority: pause UI flush briefly and cancel pending timer
-  suspendUiUntilRef.current = Date.now() + 250;
-  if (patchTimerRef.current) {
-    clearTimeout(patchTimerRef.current);
-    patchTimerRef.current = null;
-  }
+    
+    const act = action === 'OFF' ? 'OFF' : 'ON';
 
-const act = action === 'OFF' ? 'OFF' : 'ON';
+    applyTagPatchImmediate(channelId, { status: act, seen: true });
 
-// ✅ Android 设备切换 + 回包可能更慢，锁久一点体验更稳
-const lockDuration = Platform.OS === 'android' ? 8000 : 5000;
+    // ✅ 只保留一个，3秒锁，5秒pending
+    const lockDuration = 12000;
+    toggleLockRef.current.set(channelId, Date.now() + lockDuration);
 
-// ✅ Map uses only numeric keys
-toggleLockRef.current.set(channelId, Date.now() + lockDuration);
-
-pendingToggleRef.current.set(channelId, {
-  desired: act,                   // 'ON' or 'OFF'
-  expiresAt: Date.now() + 12000,  // ✅ 最多等 12 秒确认（避免太快解除导致“反弹”）
-  okCount: 0,                     // ✅ 一定要从 0 开始
-});
-
-  // Instant UI feedback (no batching)
-  applyTagPatchImmediate(channelId, { status: act, seen: true });
-
-  // Publish in next tick (do not block UI thread)
-  safeSetTimeout(() => {
-    const cpid = derived.cpid;
-    const gatewayId = derived.deviceId;
-    if (!cpid || !gatewayId) return;
-
-    const payload = JSON.stringify(
-      buildCmdSupervisorExact({
-        cpid,
-        targetId: gatewayId,
-        action: act,
-        channelId: channelId, 
-        ackId: randomHex8(),
-        useCPrefix: true,
-      })
-    );
-
-    publishControl(payload).catch((e) => {
-      toast(e?.message || String(e));
-      toggleLockRef.current.delete(channelId); 
-      enqueueTagPatch({ [channelId]: { status: act === 'ON' ? 'OFF' : 'ON', seen: true } });
+    pendingToggleRef.current.set(channelId, {
+      desired: act,
+      expiresAt: Date.now() + 15000,
+      okCount: 0,
     });
-  }, 0);
-}, [connectionStatus, derived.cpid, derived.deviceId, publishControl, enqueueTagPatch, applyTagPatchImmediate]);
+    suspendUiUntilRef.current = Date.now() + 250;
+    if (patchTimerRef.current) {
+      clearTimeout(patchTimerRef.current);
+      patchTimerRef.current = null;
+    }
+
+
+    
+    safeSetTimeout(() => {
+      const cpid = derived.cpid;
+      const gatewayId = derived.deviceId;
+      if (!cpid || !gatewayId) return;
+
+      const payload = JSON.stringify(
+        buildCmdSupervisorExact({
+          cpid,
+          targetId: gatewayId,
+          action: act,
+          channelId: channelId,
+          ackId: randomHex8(),
+          useCPrefix: true,
+        })
+      );
+
+      publishControl(payload).catch((e) => {
+        toast(e?.message || String(e));
+        toggleLockRef.current.delete(channelId);
+        enqueueTagPatch({ [channelId]: { status: act === 'ON' ? 'OFF' : 'ON', seen: true } });
+      });
+    }, 0);
+  }, [connectionStatus, derived.cpid, derived.deviceId, publishControl, enqueueTagPatch, applyTagPatchImmediate]);
   const publishSetName = useCallback(async (ch, newName) => {
     if (connectionStatus !== CONN.CONNECTED) return;
 
@@ -1407,8 +1424,8 @@ pendingToggleRef.current.set(channelId, {
     }
 
     // pending + lock
-    pendingNameRef.current.set(channel, { value: nameStr, expiresAt: Date.now() + 8000 });
-    nameLockRef.current.set(channel, Date.now() + 8000);
+    pendingNameRef.current.set(channel, { value: nameStr, expiresAt: Date.now() + 15000 });
+    nameLockRef.current.set(channel, Date.now() + 15000);
 
     const ackIdA = randomHex8();
     const ackIdB = randomHex8();
@@ -1445,7 +1462,7 @@ pendingToggleRef.current.set(channelId, {
     console.log('[PUB SetName B]', JSON.stringify(payloadObjB));
 
     // Optimistic UI: update via batched patch (avoid copying whole tags map)
-   applyTagPatchImmediate(channel, { tagName: nameStr, seen: true });
+    applyTagPatchImmediate(channel, { tagName: nameStr, seen: true });
 
     // ✅ Save immediately so next time screen opens it shows instantly
     saveNameCache({
@@ -1473,7 +1490,7 @@ pendingToggleRef.current.set(channelId, {
       nameLockRef.current.set(channel, 0);
       toast(`Name save timeout: C${channel}`);
       requestNameBank(bank);
-    }, 8200);
+    }, 15500);
 
   }, [connectionStatus, derived.cpid, derived.deviceId, publishWrite, requestNameBank, applyTagPatchImmediate]);
 
@@ -1546,7 +1563,7 @@ pendingToggleRef.current.set(channelId, {
       pendingRatingRef.current.delete(channel);
       toast(`Rating save timeout: C${channel}`);
       requestRatingMap?.();
-    }, 8200);
+    }, 15500);
   }, [connectionStatus, derived.cpid, derived.deviceId, publishWrite, requestRatingMap]);
 
   const renderTab = (key, label, icon) => {
@@ -1572,6 +1589,7 @@ pendingToggleRef.current.set(channelId, {
     }
 
     clearTagsToUnknown();
+    pendingPatchRef.current = {};
     toast('Refreshing...');
     setShowMenu(false);
 
@@ -1582,6 +1600,28 @@ pendingToggleRef.current.set(channelId, {
       didRequestCfgRef.current = true;
     }
   }, [clearTagsToUnknown, connectionStatus, requestNameMap, requestRatingMap, derived.cpid, derived.deviceId]);
+
+  //   const refreshNow = useCallback(async () => {
+  //   // ✅ 临时测试：清除所有name cache
+  //   try {
+  //     await AsyncStorage.clear();
+  //     toast('All cache cleared!');
+  //   } catch (e) {
+  //     console.log('[CACHE] clear failed', e?.message || String(e));
+  //   }
+
+  //   clearTagsToUnknown();
+  //   pendingPatchRef.current = {};
+  //   setShowMenu(false);
+
+  //   if (connectionStatus === CONN.CONNECTED) {
+  //     didRequestCfgRef.current = false;
+  //     requestNameMap();
+  //     requestRatingMap();
+  //     didRequestCfgRef.current = true;
+  //   }
+  // }, [clearTagsToUnknown, connectionStatus, requestNameMap, requestRatingMap]);
+
   /*const onGoBle = useCallback(() => {
     setShowMenu(false);
     Alert.alert('Bluetooth (BLE)', 'Coming soon.');
@@ -1655,7 +1695,60 @@ pendingToggleRef.current.set(channelId, {
                 <Text style={styles.menuText}>Connect</Text>
               </TouchableOpacity>
             )}
+            {/* Switch to BLE */}
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={async () => {
+                if (connectionStatus === CONN.DISCONNECTING) return;
+                setShowMenu(false);
+                isSwitchingToBleRef.current = true;
+                clearAllTimeouts();
+                stopFastIntervalTimer();
 
+                try {
+                  await Promise.race([
+                    disconnectMqtt(),
+                    new Promise(resolve => setTimeout(resolve, 2000)),
+                  ]);
+                } catch (_) { }
+
+                await new Promise(resolve => setTimeout(resolve, 300));
+
+                // ✅ 用 MQTT deviceId（就是UniqueId）查 BLE 地址
+                const uid = String(device?.deviceId || derived?.deviceId || '').trim();
+                if (!uid) {
+                  toast('Missing device ID');
+                  navigation.reset({ index: 0, routes: [{ name: 'Scanner' }] });
+                  return;
+                }
+
+                const raw = await AsyncStorage.getItem(`UNIQUEID_TO_BLE::${uid}`).catch(() => null);
+                console.log('[SWITCH BLE] UNIQUEID_TO_BLE::', uid, '→', raw);
+
+                if (raw) {
+                  let bleDeviceObj = null;
+                  try {
+                    bleDeviceObj = JSON.parse(raw);
+                  } catch {
+                    bleDeviceObj = { id: raw.trim(), advName: '' };
+                  }
+
+                  if (bleDeviceObj?.id) {
+                    navigation.replace('DeviceDetail', {
+                      device: bleDeviceObj,
+                      bleDevice: bleDeviceObj,
+                      mqttDevice: device,
+                    });
+                    return;
+                  }
+                }
+
+                toast('BLE device not found. Please connect via BLE once first.');
+                navigation.reset({ index: 0, routes: [{ name: 'Scanner' }] });
+              }}
+            >
+              <Text style={styles.menuText}>Switch to BLE</Text>
+            </TouchableOpacity>
             {Platform.OS === 'android' && (
               <TouchableOpacity style={[styles.menuItem, styles.menuItemLast]} onPress={() => { setShowMenu(false); BackHandler.exitApp(); }}>
                 <Text style={styles.menuText}>Exit</Text>

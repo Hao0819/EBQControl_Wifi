@@ -4,7 +4,7 @@ import { View, Text, Pressable, StyleSheet, Image } from 'react-native';
 
 const ICON = require('../assets/images/circuitbreaker.png');
 
-export default function MqttDeviceListItem({ device, onPress, onLongPress, online=false, connecting=false }) {
+export default function MqttDeviceListItem({ device, onPress, onLongPress, online = false, connecting = false }) {
   const name = device?.friendlyName || device?.name || 'MQTT Device';
   const id = device?.deviceId || device?.id || '';
 
@@ -14,26 +14,26 @@ export default function MqttDeviceListItem({ device, onPress, onLongPress, onlin
   else if (online) { badgeText = 'ONLINE'; badgeStyle = styles.badgeOn; }
 
   return (
-    
+
     <Pressable
-  style={({ pressed }) => [styles.card, pressed && styles.pressed]}
-  onPress={onPress}
-  onLongPress={onLongPress}
-  delayLongPress={350}
-  android_disableSound
-  hitSlop={8}
->
-  <Image source={ICON} style={styles.icon} resizeMode="contain" />
+      style={({ pressed }) => [styles.card, pressed && styles.pressed]}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={350}
+      android_disableSound
+      hitSlop={8}
+    >
+      <Image source={ICON} style={styles.icon} resizeMode="contain" />
 
-  <View style={styles.mid}>
-    <Text style={styles.name} numberOfLines={1}>{name}</Text>
-    {!!id && <Text style={styles.sub} numberOfLines={1}>{id}</Text>}
-  </View>
+      <View style={styles.mid}>
+        <Text style={styles.name} numberOfLines={1}>{name}</Text>
+        {!!id && <Text style={styles.sub} numberOfLines={1}>{id}</Text>}
+      </View>
 
-  <View style={styles.right}>
-    <Text style={styles.chev}>›</Text>
-  </View>
-</Pressable>
+      <View style={styles.right}>
+        <Text style={styles.chev}>›</Text>
+      </View>
+    </Pressable>
 
   );
 }

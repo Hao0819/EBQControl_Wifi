@@ -128,35 +128,35 @@ export default function AddMqttDevice({ navigation }) {
     try {
       const cpId = '51c5c752';
 
-     const auth = await authenticateForAddDevice({
-  host: host.trim(),
-  port: parsedPort,
-  username: String(username || '').trim(),
-  password: String(password || ''),
-  cpId,
-  deviceId: normalizedDeviceId,
-});
+      const auth = await authenticateForAddDevice({
+        host: host.trim(),
+        port: parsedPort,
+        username: String(username || '').trim(),
+        password: String(password || ''),
+        cpId,
+        deviceId: normalizedDeviceId,
+      });
 
-const device = {
-  friendlyName: friendlyName.trim(),
-  name: friendlyName.trim(),
-  deviceId: normalizedDeviceId,
+      const device = {
+        friendlyName: friendlyName.trim(),
+        name: friendlyName.trim(),
+        deviceId: normalizedDeviceId,
 
-  host: host.trim(),
-  port: parsedPort,
-  username: String(username || '').trim(),
-  password: String(password || ''),
+        host: host.trim(),
+        port: parsedPort,
+        username: String(username || '').trim(),
+        password: String(password || ''),
 
- useTls: auth.useTls,
+        useTls: auth.useTls,
 
-  topic: auth.topicSub,
-  topicBase: auth.topicBase,
-  cpId,
-  presetKey,
-  lastStatus: '',
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-};
+        topic: auth.topicSub,
+        topicBase: auth.topicBase,
+        cpId,
+        presetKey,
+        lastStatus: '',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
 
 
       // 3) Save only after auth passed
@@ -420,75 +420,75 @@ const styles = StyleSheet.create({
 
   row: { flexDirection: 'row' },
 
- // Modern select (like your last screenshot)
-selectBox: {
-  borderWidth: 1.5,
-  borderColor: '#93C5FD',
-  borderRadius: 10,
-  paddingHorizontal: 12,
-  paddingVertical: 10,
-  backgroundColor: '#fff',
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-},
-selectBoxOpen: {
-  borderColor: '#60A5FA',
-},
-selectText: {
-  fontSize: 14,
-  color: '#0F172A',
-  fontWeight: '600',
-  flex: 1,
-},
-selectPlaceholder: {
-  color: '#64748B',
-  fontWeight: '600',
-},
-chevron: {
-  fontSize: 16,
-  color: '#64748B',
-  marginLeft: 12,
-  marginTop: -1,
-},
+  // Modern select (like your last screenshot)
+  selectBox: {
+    borderWidth: 1.5,
+    borderColor: '#93C5FD',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  selectBoxOpen: {
+    borderColor: '#60A5FA',
+  },
+  selectText: {
+    fontSize: 14,
+    color: '#0F172A',
+    fontWeight: '600',
+    flex: 1,
+  },
+  selectPlaceholder: {
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  chevron: {
+    fontSize: 16,
+    color: '#64748B',
+    marginLeft: 12,
+    marginTop: -1,
+  },
 
-overlay: {
-  flex: 1,
-  backgroundColor: 'transparent',
-},
+  overlay: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
 
-dropdown: {
-  position: 'absolute',
-  backgroundColor: '#fff',
-  borderRadius: 12,
-  borderWidth: 1,
-  borderColor: '#E2E8F0',
-  overflow: 'hidden',
-  elevation: 10,
-  shadowColor: '#000',
-  shadowOpacity: 0.10,
-  shadowRadius: 10,
-  shadowOffset: { width: 0, height: 4 },
-},
+  dropdown: {
+    position: 'absolute',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    overflow: 'hidden',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.10,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
 
-dropdownItem: {
-  paddingHorizontal: 14,
-  paddingVertical: 12,
-},
+  dropdownItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
 
-dropdownItemSelected: {
-  backgroundColor: '#F1F5F9',
-},
+  dropdownItemSelected: {
+    backgroundColor: '#F1F5F9',
+  },
 
-dropdownItemPressed: {
-  backgroundColor: '#E8F0FF',
-},
+  dropdownItemPressed: {
+    backgroundColor: '#E8F0FF',
+  },
 
-dropdownText: {
-  fontSize: 14,
-  color: '#334155',
-  fontWeight: '600',
-},
+  dropdownText: {
+    fontSize: 14,
+    color: '#334155',
+    fontWeight: '600',
+  },
 
 
 

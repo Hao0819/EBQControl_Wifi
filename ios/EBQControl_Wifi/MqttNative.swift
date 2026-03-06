@@ -180,14 +180,36 @@ class MqttNative: RCTEventEmitter, CocoaMQTTDelegate {
     rejecters.removeValue(forKey: cid)
   }
 
-  func mqtt(_ mqtt: CocoaMQTT, didReceiveMessage message: CocoaMQTTMessage, id: UInt16) {
+func mqtt(_ mqtt: CocoaMQTT, didReceiveMessage message: CocoaMQTTMessage, id: UInt16) {
     let cid = mqtt.clientID
     guard clients[cid] === mqtt else { return }
+
+    var bytes = message.payload
+    // ✅ 去掉末尾 \r\n\0
+    while bytes.last == 13 || bytes.last == 10 || bytes.last == 0 {
+        bytes.removeLast()
+    }
+
+    let payloadStr: String
+    if bytes.isEmpty {
+        payloadStr = ""
+    } else if let s = String(bytes: bytes, encoding: .utf8) {
+        // ✅ 标准UTF-8成功
+        payloadStr = s
+    } else {
+        // ✅ UTF-8失败时，用lossy方式强制解码，保留能解的字符，损坏字节替换成?
+        payloadStr = String(bytes: bytes, encoding: .utf8) ?? 
+                     String(decoding: bytes, as: UTF8.self)  // lossy decode
+    }
+
+    print("[MQTT RAW] topic=\(message.topic)")
+    print("[MQTT RAW] payloadStr=\(payloadStr)")
+
     emit("mqtt_message", clientId: cid, extra: [
-      "topic": message.topic,
-      "payload": message.string ?? ""
+        "topic": message.topic,
+        "payload": payloadStr
     ])
-  }
+}
 
   func mqttDidDisconnect(_ mqtt: CocoaMQTT, withError err: Error?) {
     let cid = mqtt.clientID

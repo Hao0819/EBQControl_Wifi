@@ -1,8 +1,6 @@
 // src/components/MqttDeviceGridView.js
-// MQTT grid UI matched to BLE version (square tiles, baseline current row, same badge/button layout)
-// - Keeps MQTT optimizations: fixed IDs, local override Map, extraData tick, responsive columns
 
-import React, { memo, useMemo, useCallback, useRef, useState } from 'react';
+import React, { memo, useMemo, useCallback, useRef } from 'react';
 import { FlatList, StyleSheet, TouchableOpacity, Text, View } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 
@@ -12,39 +10,28 @@ const MIN_COLUMNS = 3;
 const MAX_COLUMNS = 10;
 
 const GRID_BG = '#eff2f6';
-// --- Layout tuning (match BLE look) ---
-const GRID_PADDING_H = 0;  // screen already has padding=16
-const ITEM_MARGIN = 2;     // must match styles.gridItem.margin
-const MIN_ITEM_SIZE = 68;  // minimum tile size
-const TILE_RATIO = 1.0;    // square (BLE look)
+const GRID_PADDING_H = 0;
+const ITEM_MARGIN = 2;
+const MIN_ITEM_SIZE = 68;
+const TILE_RATIO = 1.0;
 
 const GridItem = memo(
   ({
     item,
     onToggle,
     onSelect,
-    onLocalToggle,
     connectionStatus,
     itemSize,
     itemHeight,
-    overrideStatus,
-    overrideTs,
   }) => {
     const isActive = String(connectionStatus || '').toLowerCase() === 'connected';
 
-    // ---- Determine effective status (MQTT) ----
-    const statusUpper = String(item?.status || 'UNKNOWN').toUpperCase();
+    // ✅ 直接用 tags 状态，不再有 localOverride
+    const effectiveStatus = String(item?.status || 'UNKNOWN').toUpperCase();
 
-    // local override lasts 1500ms
-    const now = Date.now();
-    const hasOverride = !!overrideStatus && now - (overrideTs || 0) < 1500;
-    const effectiveStatus = hasOverride ? String(overrideStatus).toUpperCase() : statusUpper;
-
- 
-const isDim = (!item?.seen && !hasOverride);
-const isUnknown = effectiveStatus === 'UNKNOWN';
-const isDisabled = isDim || isUnknown;
-
+    const isDim = !item?.seen;
+    const isUnknown = effectiveStatus === 'UNKNOWN';
+    const isDisabled = isDim || isUnknown;
 
     const operationalStatus =
       isUnknown ? 'UNKNOWN'
@@ -55,16 +42,9 @@ const isDisabled = isDim || isUnknown;
 
     const isPoweredOn = operationalStatus === 'ON';
 
-    // BLE-style badge behavior:
-    // - If unknown -> grey
-    // - Else -> green when ON, red when OFF
-
-const badgeColor = isDisabled ? '#94A3B8' : (isPoweredOn ? '#10B981' : '#EF4444');
-
-
-const powerColor = isPoweredOn ? '#10B981' : '#EF4444';
-
-const currentText = isDisabled ? '-' : (item?.current ?? '-');
+    const badgeColor = isDisabled ? '#94A3B8' : (isPoweredOn ? '#10B981' : '#EF4444');
+    const powerColor = isPoweredOn ? '#10B981' : '#EF4444';
+    const currentText = isDisabled ? '-' : (item?.current ?? '-');
 
     return (
       <TouchableOpacity
@@ -90,8 +70,7 @@ const currentText = isDisabled ? '-' : (item?.current ?? '-');
             onPress={() => {
               if (!isActive || isDisabled) return;
               const next = isPoweredOn ? 'OFF' : 'ON';
-              onLocalToggle?.(item.id, next); // fast UI
-              onToggle?.(item.id, next);      // publish MQTT command
+              onToggle?.(item.id, next);
             }}
             disabled={!isActive || isDisabled}
             activeOpacity={0.85}
@@ -100,14 +79,13 @@ const currentText = isDisabled ? '-' : (item?.current ?? '-');
           </TouchableOpacity>
         </View>
 
-        {/* Current row: baseline (BLE look) */}
+        {/* Current row */}
         <View style={styles.currentContainer}>
-  <Text style={[styles.currentText, isDisabled && styles.disabledText]} numberOfLines={1}>
-    {currentText}
-  </Text>
-
+          <Text style={[styles.currentText, isDisabled && styles.disabledText]} numberOfLines={1}>
+            {currentText}
+          </Text>
           <View style={styles.unitContainer}>
-          <Text style={[styles.currentUnit, isDisabled && styles.disabledText]}>A</Text>
+            <Text style={[styles.currentUnit, isDisabled && styles.disabledText]}>A</Text>
           </View>
         </View>
       </TouchableOpacity>
@@ -119,23 +97,12 @@ const currentText = isDisabled ? '-' : (item?.current ?? '-');
     prev.item?.seen === next.item?.seen &&
     prev.connectionStatus === next.connectionStatus &&
     prev.itemSize === next.itemSize &&
-    prev.itemHeight === next.itemHeight &&
-    prev.overrideStatus === next.overrideStatus &&
-    prev.overrideTs === next.overrideTs
+    prev.itemHeight === next.itemHeight
 );
 
 const DeviceGridView = memo(({ tags, onToggle, onSelect, connectionStatus, numColumns, layoutWidth }) => {
   const baseWidth = Number(layoutWidth) > 0 ? Number(layoutWidth) : 0;
   if (baseWidth <= 0) return <View style={{ flex: 1, backgroundColor: GRID_BG }} />;
-
-  // Local overrides: id -> { status, ts }
-  const localOverrideRef = useRef(new Map());
-  const [tick, setTick] = useState(0);
-
-  const onLocalToggle = useCallback((id, status) => {
-    localOverrideRef.current.set(Number(id), { status, ts: Date.now() });
-    setTick((x) => x + 1);
-  }, []);
 
   const contentWidth = useMemo(
     () => Math.max(0, baseWidth - GRID_PADDING_H * 2),
@@ -157,34 +124,26 @@ const DeviceGridView = memo(({ tags, onToggle, onSelect, connectionStatus, numCo
     return Math.max(1, Math.floor(size));
   }, [contentWidth, columns]);
 
-  // BLE look = square tiles
   const itemHeight = useMemo(() => Math.max(1, Math.round(itemSize * TILE_RATIO)), [itemSize]);
 
   const listKey = useMemo(() => `grid-${columns}`, [columns]);
 
   const renderItem = useCallback(
     ({ item: id }) => {
-      const it = tags?.[id] || { id, status: 'OFF', current: '-', seen: false };
-
-      const ov = localOverrideRef.current.get(id);
-      const overrideStatus = ov?.status ?? null;
-      const overrideTs = ov?.ts ?? 0;
+      const it = tags?.[id] || { id, status: 'UNKNOWN', current: '-', seen: false };
 
       return (
         <GridItem
           item={it}
           onToggle={onToggle}
           onSelect={onSelect}
-          onLocalToggle={onLocalToggle}
           connectionStatus={connectionStatus}
           itemSize={itemSize}
           itemHeight={itemHeight}
-          overrideStatus={overrideStatus}
-          overrideTs={overrideTs}
         />
       );
     },
-    [tags, onToggle, onSelect, onLocalToggle, connectionStatus, itemSize, itemHeight]
+    [tags, onToggle, onSelect, connectionStatus, itemSize, itemHeight]
   );
 
   const getItemLayout = useCallback(
@@ -206,7 +165,6 @@ const DeviceGridView = memo(({ tags, onToggle, onSelect, connectionStatus, numCo
         keyExtractor={(id) => `grid-${id}`}
         numColumns={columns}
         getItemLayout={getItemLayout}
-        extraData={tick}
         initialNumToRender={columns * 8}
         maxToRenderPerBatch={columns * 8}
         windowSize={7}
@@ -224,8 +182,6 @@ const DeviceGridView = memo(({ tags, onToggle, onSelect, connectionStatus, numCo
 
 const styles = StyleSheet.create({
   gridContainer: { paddingTop: 4 },
-
-  // BLE-like tile
   gridItem: {
     margin: ITEM_MARGIN,
     padding: 2,
@@ -235,10 +191,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderColor: '#E5E7EB',
     borderWidth: StyleSheet.hairlineWidth,
-    // no elevation (BLE style is flatter); add if you want:
-    // elevation: 2,
   },
-
   topContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -247,11 +200,8 @@ const styles = StyleSheet.create({
   idBadgeContainer: { flexDirection: 'row', alignItems: 'center' },
   tagId: { fontSize: 14, fontWeight: '600', color: '#1E293B' },
   statusBadge: { width: 6, height: 6, borderRadius: 5, marginLeft: 2 },
-
   powerButton: { padding: 1, borderRadius: 4, borderWidth: 1, borderColor: '#E2E8F0' },
   disabledButton: { opacity: 0.5, borderColor: '#CBD5E1' },
-
-  // BLE current row (baseline + unit bottom-right)
   currentContainer: {
     flexDirection: 'row',
     alignItems: 'baseline',
@@ -269,11 +219,9 @@ const styles = StyleSheet.create({
     right: 2,
   },
   currentUnit: { fontSize: 12, color: '#64748B', fontWeight: '400' },
-
   disabledGridItem: { backgroundColor: '#F8FAFC', opacity: 0.7 },
   disabledText: { color: '#94A3B8' },
-
   selectedBackground: { backgroundColor: '#82CAFF', borderWidth: 1, borderColor: '#90CAF9' },
 });
 
-export default DeviceGridView; 
+export default DeviceGridView;

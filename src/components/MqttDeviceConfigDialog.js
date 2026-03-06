@@ -67,19 +67,19 @@ export default function MqttDeviceConfigDialog({ visible, onClose, item, onSaveN
   }, [parsedCurrent, sensitivity, visible, item?.id]);
 
   const buildConfirmMessage = useCallback(() => {
-  const parts = [];
+    const parts = [];
 
-  if (didChangeName) {
-    parts.push(`Confirm update device name to "${nameTrimmed}"?`);
-  }
+    if (didChangeName) {
+      parts.push(`Confirm update device name to "${nameTrimmed}"?`);
+    }
 
-  if (didChangeCurrent) {
-    const newCur = clamp(Number(parsedCurrent), 0, 40);
-    parts.push(`Confirm update maximum current rating to ${newCur.toFixed(1)}A?\nSensitivity Level: ${sensitivity}`);
-  }
+    if (didChangeCurrent) {
+      const newCur = clamp(Number(parsedCurrent), 0, 40);
+      parts.push(`Confirm update maximum current rating to ${newCur.toFixed(1)}A?\nSensitivity Level: ${sensitivity}`);
+    }
 
-  return parts.join('\n\n');
-}, [didChangeName, didChangeCurrent, nameTrimmed, parsedCurrent, sensitivity]);
+    return parts.join('\n\n');
+  }, [didChangeName, didChangeCurrent, nameTrimmed, parsedCurrent, sensitivity]);
 
   const handleUpdate = () => {
     if (!item) return;
@@ -198,13 +198,13 @@ export default function MqttDeviceConfigDialog({ visible, onClose, item, onSaveN
             </TouchableOpacity>
 
             <TouchableOpacity
-  style={[styles.button, styles.saveButton, !canUpdate && styles.disabledButton]}
-  onPress={handleUpdate}
-  activeOpacity={0.85}
-  disabled={!canUpdate}
->
-  <Text style={[styles.saveText, !canUpdate && styles.disabledButtonText]}>Update</Text>
-</TouchableOpacity>
+              style={[styles.button, styles.saveButton, !canUpdate && styles.disabledButton]}
+              onPress={handleUpdate}
+              activeOpacity={0.85}
+              disabled={!canUpdate}
+            >
+              <Text style={[styles.saveText, !canUpdate && styles.disabledButtonText]}>Update</Text>
+            </TouchableOpacity>
 
           </View>
         </View>
@@ -290,6 +290,6 @@ const styles = StyleSheet.create({
   cancelText: { fontSize: 14, fontWeight: '600', color: '#64748B' },
   saveText: { fontSize: 14, fontWeight: '600', color: '#FFFFFF', textAlign: 'center' },
   disabledButton: { backgroundColor: '#CBD5E1' },
-disabledButtonText: { color: '#F8FAFC' },
+  disabledButtonText: { color: '#F8FAFC' },
 
 });

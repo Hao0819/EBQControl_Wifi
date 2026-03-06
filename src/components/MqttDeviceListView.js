@@ -1,4 +1,4 @@
-// src/components/DeviceListView.js
+// src/components/MqttDeviceListView.js
 import React, { memo, useCallback, useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList } from 'react-native';
 
@@ -19,86 +19,84 @@ const ListItem = memo(({ item, connectionStatus, onToggle, onSelect }) => {
   }[statusUpper] || '#94A3B8';
 
   return (
-<View style={[styles.listItem, isUnknown && styles.disabledItem]}>
-  {/* Left area: click to open config */}
-  <TouchableOpacity
-    style={styles.leftPressArea}
-    onPress={() => !isUnknown && onSelect?.(item.id)}
-    disabled={isUnknown}
-    activeOpacity={0.85}
-    delayPressIn={0}
-  >
-    <View style={styles.statusBadgeContainer}>
-      <View style={[styles.statusBadge, { backgroundColor: statusColor }]} />
-      <Text style={styles.tagId}> {item.id}</Text>
-    </View>
-
-    <Text style={styles.tagName} numberOfLines={1} ellipsizeMode="tail">
-      {String(item?.tagName || '').trim() || `Device ${item?.id}`}
-    </Text>
-  </TouchableOpacity>
-
-  {/* Right area: current + ON/OFF */}
-  <View style={styles.rightContainer}>
-    <View style={styles.currentContainer}>
-      <Text style={styles.currentText}>{item?.current ?? '-'}</Text>
-      <Text style={styles.currentUnit}>A</Text>
-    </View>
-
-    <View style={styles.buttonGroup}>
-      {/* ON */}
+    <View style={[styles.listItem, isUnknown && styles.unknownItem]}>
+      {/* Left area: click to open config */}
       <TouchableOpacity
-        style={[
-          styles.actionButton,
-          isPoweredOn && styles.activeOnButton,
-          (!isActive || isUnknown) && styles.disabledButton,
-        ]}
-        onPressIn={() => onToggle?.(item.id, 'ON')}
-        delayPressIn={0}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        onStartShouldSetResponder={() => true}
-        onResponderTerminationRequest={() => false}
-        disabled={!isActive || isPoweredOn || isUnknown}
+        style={styles.leftPressArea}
+        onPress={() => onSelect?.(item.id)}
         activeOpacity={0.85}
+        delayPressIn={0}
       >
-        <Text style={[styles.buttonText, isPoweredOn ? styles.activeButtonText : styles.inactiveButtonText]}>
-          ON
+        <View style={styles.statusBadgeContainer}>
+          <View style={[styles.statusBadge, { backgroundColor: statusColor }]} />
+          <Text style={styles.tagId}> {item.id}</Text>
+        </View>
+        <Text style={styles.tagName} numberOfLines={1} ellipsizeMode="tail">
+          {String(item?.tagName || '').trim() || `Device ${item?.id}`}
         </Text>
       </TouchableOpacity>
 
-      {/* OFF */}
-      <TouchableOpacity
-        style={[
-          styles.actionButton,
-          !isPoweredOn && styles.activeOffButton,
-          (!isActive || isUnknown) && styles.disabledButton,
-        ]}
-        onPressIn={() => onToggle?.(item.id, 'OFF')}
-        delayPressIn={0}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        onStartShouldSetResponder={() => true}
-        onResponderTerminationRequest={() => false}
-        disabled={!isActive || !isPoweredOn || isUnknown}
-        activeOpacity={0.85}
-      >
-        <Text style={[styles.buttonText, !isPoweredOn ? styles.activeButtonText : styles.inactiveButtonText]}>
-          OFF
-        </Text>
-      </TouchableOpacity>
+      {/* Right area: current + ON/OFF */}
+      <View style={styles.rightContainer}>
+        <View style={styles.currentContainer}>
+          <Text style={styles.currentText}>{item?.current ?? '-'}</Text>
+          <Text style={styles.currentUnit}>A</Text>
+        </View>
+        <View style={styles.buttonGroup}>
+          {/* ON */}
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              isPoweredOn && styles.activeOnButton,
+              (!isActive || isUnknown) && styles.disabledButton,
+            ]}
+            onPress={() => onToggle?.(item.id, 'ON')}
+            delayPressIn={0}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            disabled={!isActive || isUnknown}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.buttonText, isPoweredOn ? styles.activeButtonText : styles.inactiveButtonText]}>
+              ON
+            </Text>
+          </TouchableOpacity>
+
+          {/* OFF */}
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              !isPoweredOn && !isUnknown && styles.activeOffButton,
+              (!isActive || isUnknown) && styles.disabledButton,
+            ]}
+            onPress={() => onToggle?.(item.id, 'OFF')}
+            delayPressIn={0}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            disabled={!isActive || isUnknown}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.buttonText, (!isPoweredOn && !isUnknown) ? styles.activeButtonText : styles.inactiveButtonText]}>
+              OFF
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </View>
-  </View>
-</View>
   );
 });
 
 const DeviceListView = memo(({ tags = {}, connectionStatus, onToggle, onSelect }) => {
-  // ✅ 让 renderItem 不因为 tags 更新而变新函数
   const tagsRef = useRef(tags);
   useEffect(() => { tagsRef.current = tags; }, [tags]);
 
   const renderItem = useCallback(
     ({ item: id }) => {
-      const it = tagsRef.current?.[id] || { id, status: 'UNKNOWN', current: '-', seen: false, tagName: `Device ${id}` };
+      const it = tagsRef.current?.[id] || {
+        id,
+        status: 'UNKNOWN',
+        current: '-',
+        seen: false,
+        tagName: `Device ${id}`,
+      };
       return (
         <ListItem
           item={it}
@@ -134,12 +132,11 @@ const DeviceListView = memo(({ tags = {}, connectionStatus, onToggle, onSelect }
 
 const styles = StyleSheet.create({
   leftPressArea: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  flex: 1,
-  minWidth: 0,
-},
-
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
   listItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -148,6 +145,11 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 8,
     elevation: 2,
+  },
+  // ✅ UNKNOWN时只轻微变灰，不再完全禁用
+  unknownItem: {
+    backgroundColor: '#F8FAFC',
+    opacity: 0.5,
   },
   statusBadgeContainer: {
     flexDirection: 'row',
@@ -177,7 +179,6 @@ const styles = StyleSheet.create({
   buttonText: { fontSize: 12, fontWeight: '600' },
   activeButtonText: { color: '#FFFFFF' },
   inactiveButtonText: { color: '#64748B' },
-  disabledItem: { backgroundColor: '#F8FAFC', opacity: 0.6 },
 });
 
 export default DeviceListView;
