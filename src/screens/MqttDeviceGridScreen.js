@@ -17,6 +17,7 @@ import DeviceGridView from '../components/MqttDeviceGridView';
 import DeviceListView from '../components/MqttDeviceListView';
 import ThreePhaseView from '../components/MqttThreePhaseView';
 import { connectAndSubscribe, disconnectMqtt, publishMqtt } from '../utils/MqttNativeClient';
+import PagerView from 'react-native-pager-view';
 
 // ===== Pure JS tabs (no material-top-tabs) =====
 const TAB = { GRID: 'GRID', LIST: 'LIST', THREE: 'THREE' };
@@ -330,7 +331,7 @@ export default memo(function MqttDeviceGridScreen() {
 
   // ===== Menu anchor (same behavior as BLE) =====
   const menuButtonRef = useRef(null);
-
+  const pagerRef = useRef(null);
   const [menuAnchor, setMenuAnchor] = useState({ x: 0, y: 0, w: 0, h: 0 });
 
   const toggleMenu = useCallback(() => {
@@ -469,15 +470,32 @@ export default memo(function MqttDeviceGridScreen() {
   const patchTimerRef = useRef(null);
   // UX/PERF: Switch tab immediately, cancel any pending flush, and pause updates for 200ms.
   const switchTab = useCallback((key) => {
-    // Pause UI refresh for 200ms, prioritize clicks.
     suspendUiUntilRef.current = Date.now() + 200;
 
-    // Key point: If a flush has already been scheduled, cancel it first to avoid an immediate delay.
     if (patchTimerRef.current) {
       clearTimeout(patchTimerRef.current);
       patchTimerRef.current = null;
     }
 
+    const index =
+      key === TAB.GRID ? 0 :
+        key === TAB.LIST ? 1 :
+          2;
+
+    pagerRef.current?.setPage(index);
+
+    setActiveTab(key);
+  }, []);
+
+  const onPageSelected = useCallback((e) => {
+    const i = e.nativeEvent.position;
+
+    const key =
+      i === 0 ? TAB.GRID :
+        i === 1 ? TAB.LIST :
+          TAB.THREE;
+
+    activeTabRef.current = key;
     setActiveTab(key);
   }, []);
 
@@ -550,7 +568,7 @@ export default memo(function MqttDeviceGridScreen() {
 
                 out = { ...out, status: desired };
               }
-              
+
 
               // ✅ 重新读取 isLocked（因为上面刚刚更新了 toggleLockRef）
               const isLockedNow = Date.now() < (toggleLockRef.current.get(id) || 0);
@@ -1363,10 +1381,12 @@ export default memo(function MqttDeviceGridScreen() {
     const channelId = Number(id);
     if (!Number.isFinite(channelId)) return;
 
-    
+
+
     const act = action === 'OFF' ? 'OFF' : 'ON';
 
     applyTagPatchImmediate(channelId, { status: act, seen: true });
+
 
     // ✅ 只保留一个，3秒锁，5秒pending
     const lockDuration = 12000;
@@ -1377,14 +1397,13 @@ export default memo(function MqttDeviceGridScreen() {
       expiresAt: Date.now() + 15000,
       okCount: 0,
     });
+
     suspendUiUntilRef.current = Date.now() + 250;
     if (patchTimerRef.current) {
       clearTimeout(patchTimerRef.current);
       patchTimerRef.current = null;
     }
 
-
-    
     safeSetTimeout(() => {
       const cpid = derived.cpid;
       const gatewayId = derived.deviceId;
@@ -1408,6 +1427,7 @@ export default memo(function MqttDeviceGridScreen() {
       });
     }, 0);
   }, [connectionStatus, derived.cpid, derived.deviceId, publishControl, enqueueTagPatch, applyTagPatchImmediate]);
+
   const publishSetName = useCallback(async (ch, newName) => {
     if (connectionStatus !== CONN.CONNECTED) return;
 
@@ -1797,20 +1817,27 @@ export default memo(function MqttDeviceGridScreen() {
             </Text>
           </View>
         ) : (
-          <View style={styles.contentWrap}>
-            {/* GRID (always mounted) */}
-            <View style={[styles.tabPage, activeTab === TAB.GRID ? styles.shown : styles.hidden]}>
+          <PagerView
+            ref={pagerRef}
+            style={{ flex: 1 }}
+            initialPage={0}
+            onPageSelected={onPageSelected}
+            offscreenPageLimit={3}
+          >
+
+            {/* GRID */}
+            <View key="grid" style={{ flex: 1 }}>
               <DeviceGridView
                 tags={tags}
                 connectionStatus={connectionStatus}
                 onToggle={handleToggle}
                 onSelect={onSelectNoop}
-                layoutWidth={contentW}   // ✅Key: Transmit the actual width
+                layoutWidth={contentW}
               />
             </View>
 
-            {/* LIST (always mounted) */}
-            <View style={[styles.tabPage, activeTab === TAB.LIST ? styles.shown : styles.hidden]}>
+            {/* LIST */}
+            <View key="list" style={{ flex: 1 }}>
               <DeviceListView
                 tags={tags}
                 connectionStatus={connectionStatus}
@@ -1819,15 +1846,16 @@ export default memo(function MqttDeviceGridScreen() {
               />
             </View>
 
-            {/* THREE (always mounted) */}
-            <View style={[styles.tabPage, activeTab === TAB.THREE ? styles.shown : styles.hidden]}>
+            {/* THREE */}
+            <View key="three" style={{ flex: 1 }}>
               <ThreePhaseView
                 tags={tags}
                 onToggle={handleToggle}
                 onSelect={onSelectOpenConfig}
               />
             </View>
-          </View>
+
+          </PagerView>
         )}
       </View>
 

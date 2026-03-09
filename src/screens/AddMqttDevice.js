@@ -38,7 +38,7 @@ export default function AddMqttDevice({ navigation }) {
   const isSelected = presetKey !== 'select';
   const isPresetServer = presetKey === 'myebq' || presetKey === 'webiot';
 
-  // ===== Dropdown (custom) =====
+  // ===== Dropdown =====
   const [serverOpen, setServerOpen] = useState(false);
   const [serverAnchor, setServerAnchor] = useState({ x: 0, y: 0, w: 0, h: 0 });
   const serverRef = useRef(null);
@@ -56,13 +56,10 @@ export default function AddMqttDevice({ navigation }) {
 
   // ===== Form fields =====
   const [friendlyName, setFriendlyName] = useState('');
-
-  // Start empty until user selects a preset
   const [host, setHost] = useState('');
   const [port, setPort] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-
   const [deviceId, setDeviceId] = useState('');
 
   // ===== UI state =====
@@ -70,31 +67,19 @@ export default function AddMqttDevice({ navigation }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    // "Select server" => clear all server fields
     if (presetKey === 'select') {
-      setHost('');
-      setPort('');
-      setUsername('');
-      setPassword('');
+      setHost(''); setPort(''); setUsername(''); setPassword('');
       return;
     }
-
-    // "Custom" => clear all server fields (user will type manually)
     if (presetKey === 'custom') {
-      setHost('');
-      setPort('');
-      setUsername('');
-      setPassword('');
+      setHost(''); setPort(''); setUsername(''); setPassword('');
       return;
     }
-
-    // Preset server => auto fill and lock
     setHost(selectedPreset.host);
     setPort(selectedPreset.port);
     setUsername(selectedPreset.user);
     setPassword(selectedPreset.pass);
   }, [presetKey, selectedPreset]);
-
 
   const normalizedDeviceId = useMemo(() => {
     return String(deviceId || '').trim().toUpperCase();
@@ -105,24 +90,27 @@ export default function AddMqttDevice({ navigation }) {
     return Number.isFinite(p) ? p : 0;
   }, [port]);
 
+  // ✅ If user leaves friendly name empty, fall back to device ID as the name
+  const effectiveFriendlyName = useMemo(() => {
+    const trimmed = friendlyName.trim();
+    if (trimmed) return trimmed;
+    if (normalizedDeviceId) return normalizedDeviceId;
+    return '';
+  }, [friendlyName, normalizedDeviceId]);
+
   const validate = () => {
-    if (presetKey === 'select') return 'Please select server';
-    if (!friendlyName.trim()) return 'Device Friendly Name required';
-    if (!host.trim()) return 'MQTT Broker Host required';
-    if (!parsedPort || parsedPort <= 0 || parsedPort > 65535) return 'Port invalid';
-    if (!normalizedDeviceId) return 'Device ID required';
+    if (presetKey === 'select') return 'Please select a server to continue.';
+    if (!host.trim()) return 'MQTT Broker Host is required.';
+    if (!parsedPort || parsedPort <= 0 || parsedPort > 65535) return 'Port number is invalid.';
+    if (!normalizedDeviceId) return 'Device ID (MAC address) is required.';
     return '';
   };
 
   const onAdd = async () => {
     if (busy) return;
-
     setError('');
     const v = validate();
-    if (v) {
-      setError(v);
-      return;
-    }
+    if (v) { setError(v); return; }
 
     setBusy(true);
     try {
@@ -138,17 +126,14 @@ export default function AddMqttDevice({ navigation }) {
       });
 
       const device = {
-        friendlyName: friendlyName.trim(),
-        name: friendlyName.trim(),
+        friendlyName: effectiveFriendlyName,
+        name: effectiveFriendlyName,
         deviceId: normalizedDeviceId,
-
         host: host.trim(),
         port: parsedPort,
         username: String(username || '').trim(),
         password: String(password || ''),
-
         useTls: auth.useTls,
-
         topic: auth.topicSub,
         topicBase: auth.topicBase,
         cpId,
@@ -158,11 +143,8 @@ export default function AddMqttDevice({ navigation }) {
         updatedAt: Date.now(),
       };
 
-
-      // 3) Save only after auth passed
       await addMqttDevice(device);
 
-      // 4) Go detail and auto-connect
       const rootNav = navigation.getParent?.() ?? navigation;
       rootNav.dispatch(
         CommonActions.reset({
@@ -174,7 +156,7 @@ export default function AddMqttDevice({ navigation }) {
         })
       );
     } catch (e) {
-      setError(e?.message || 'connection failed');
+      setError(e?.message || 'Connection failed. Please check your settings.');
     } finally {
       setBusy(false);
     }
@@ -187,9 +169,9 @@ export default function AddMqttDevice({ navigation }) {
     >
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>MQTT DEVICE CONFIG</Text>
+          <Text style={styles.sectionTitle}>ADD MQTT DEVICE</Text>
 
-          {/* SERVER dropdown (custom UI like picture2) */}
+          {/* SERVER */}
           <Label text="SERVER" />
           <Pressable
             ref={serverRef}
@@ -202,87 +184,110 @@ export default function AddMqttDevice({ navigation }) {
             ]}
           >
             <Text style={[styles.selectText, presetKey === 'select' && styles.selectPlaceholder]}>
-              {presetKey === 'select' ? 'Select' : selectedPreset.label}
+              {presetKey === 'select' ? 'Select a server...' : selectedPreset.label}
             </Text>
-
-            {/* Chevron */}
             <Text style={styles.chevron}>{serverOpen ? '˄' : '˅'}</Text>
           </Pressable>
 
-
-          <Label text="DEVICE FRIENDLY NAME" />
-          <Input
-            placeholder="e.g. EBQ Controller Main"
+          {/* DEVICE FRIENDLY NAME */}
+          <Label text="DEVICE NAME (OPTIONAL)" />
+          <TextInput
+            style={styles.input}
+            placeholder={
+              normalizedDeviceId
+                ? `Leave blank to use "${normalizedDeviceId}"`
+                : 'e.g. Office Controller, Lab Sensor'
+            }
+            placeholderTextColor="#94A3B8"
             value={friendlyName}
             onChangeText={setFriendlyName}
             editable={!busy}
           />
+          {/* Show preview of effective name */}
+          {!friendlyName.trim() && normalizedDeviceId ? (
+            <Text style={styles.nameFallbackHint}>
+              Will be saved as: <Text style={styles.nameFallbackValue}>{normalizedDeviceId}</Text>
+            </Text>
+          ) : friendlyName.trim() ? (
+            <Text style={styles.nameFallbackHint}>
+              Will be saved as: <Text style={styles.nameFallbackValue}>{friendlyName.trim()}</Text>
+            </Text>
+          ) : null}
 
+          {/* HOST + PORT */}
           <View style={styles.row}>
             <View style={{ flex: 2 }}>
-              <Label text="MQTT BROKER HOST" />
-              <Input
+              <Label text="BROKER HOST" />
+              <TextInput
+                style={[styles.input, isSelected && !isCustom ? styles.inputLocked : null]}
                 value={host}
                 onChangeText={setHost}
                 editable={!busy && isCustom}
-                styleOverride={isSelected && !isCustom ? styles.inputLocked : null}
-                placeholder={isCustom ? 'e.g. mybroker.domain.com' : ''}
+                placeholder={isCustom ? 'e.g. broker.hivemq.com' : ''}
+                placeholderTextColor="#94A3B8"
               />
             </View>
-
             <View style={{ width: 12 }} />
-
             <View style={{ flex: 1 }}>
               <Label text="PORT" />
-              <Input
+              <TextInput
+                style={[styles.input, isSelected && !isCustom ? styles.inputLocked : null]}
                 value={String(port)}
                 onChangeText={setPort}
                 keyboardType="numeric"
                 editable={!busy && isCustom}
-                styleOverride={isSelected && !isCustom ? styles.inputLocked : null}
-                placeholder={isCustom ? 'e.g. 8883' : ''}
+                placeholder={isCustom ? '1883' : ''}
+                placeholderTextColor="#94A3B8"
               />
             </View>
           </View>
 
+          {/* USERNAME + PASSWORD */}
           <View style={styles.row}>
             <View style={{ flex: 1 }}>
               <Label text="USERNAME (OPTIONAL)" />
-              <Input
+              <TextInput
+                style={[styles.input, isSelected && !isCustom ? styles.inputLocked : null]}
                 value={username}
                 onChangeText={setUsername}
                 editable={!busy && isCustom}
-                styleOverride={isSelected && !isCustom ? styles.inputLocked : null}
                 placeholder={isCustom ? 'username' : ''}
+                placeholderTextColor="#94A3B8"
+                autoCapitalize="none"
               />
             </View>
-
             <View style={{ width: 12 }} />
-
             <View style={{ flex: 1 }}>
               <Label text="PASSWORD (OPTIONAL)" />
-              <Input
+              <TextInput
+                style={[styles.input, isSelected && !isCustom ? styles.inputLocked : null]}
                 value={password}
                 onChangeText={setPassword}
                 editable={!busy && isCustom}
-                styleOverride={isSelected && !isCustom ? styles.inputLocked : null}
                 placeholder={isCustom ? 'password' : ''}
+                placeholderTextColor="#94A3B8"
+                secureTextEntry
               />
             </View>
           </View>
 
-          <Label text="DEVICE ID (MAC)" />
-          <Input
+          {/* DEVICE ID */}
+          <Label text="DEVICE ID (MAC ADDRESS)" />
+          <TextInput
+            style={styles.input}
             value={normalizedDeviceId}
             onChangeText={(t) => setDeviceId(String(t || '').toUpperCase())}
             autoCapitalize="characters"
             editable={!busy}
             placeholder="e.g. A208F6C7F"
+            placeholderTextColor="#94A3B8"
           />
 
-          {/* Topic UI is intentionally hidden for user friendliness */}
-
-          {!!error && <Text style={styles.error}>{error}</Text>}
+          {!!error && (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>⚠ {error}</Text>
+            </View>
+          )}
 
           <View style={styles.footer}>
             <TouchableOpacity
@@ -301,7 +306,7 @@ export default function AddMqttDevice({ navigation }) {
               {busy ? (
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <ActivityIndicator size="small" color="#FFFFFF" />
-                  <Text style={[styles.addText, { marginLeft: 10 }]}>Saving...</Text>
+                  <Text style={[styles.addText, { marginLeft: 8 }]}>Connecting...</Text>
                 </View>
               ) : (
                 <Text style={styles.addText}>Add & Connect</Text>
@@ -309,23 +314,23 @@ export default function AddMqttDevice({ navigation }) {
             </TouchableOpacity>
           </View>
 
+          {/* Hints */}
           {!isSelected && (
-            <Text style={styles.hint}>Please select a server first.</Text>
+            <Text style={styles.hint}> Please select a server to get started.</Text>
           )}
           {isPresetServer && (
-            <Text style={styles.hint}>Server details are auto-filled. Only Device ID is required.</Text>
+            <Text style={styles.hint}>✓ Server credentials are pre-filled. Only Device ID is required.</Text>
           )}
         </View>
       </ScrollView>
 
-      {/* Dropdown Menu */}
+      {/* Dropdown Modal */}
       <Modal
         transparent
         visible={serverOpen}
         animationType="fade"
         onRequestClose={() => setServerOpen(false)}
       >
-        {/* Click outside to close */}
         <Pressable style={styles.overlay} onPress={() => setServerOpen(false)}>
           <View
             style={[
@@ -340,16 +345,20 @@ export default function AddMqttDevice({ navigation }) {
             {PRESETS.filter(p => p.key !== 'select').map(p => (
               <Pressable
                 key={p.key}
-                onPress={() => {
-                  setPresetKey(p.key);
-                  setServerOpen(false);
-                }}
+                onPress={() => { setPresetKey(p.key); setServerOpen(false); }}
                 style={({ pressed }) => [
                   styles.dropdownItem,
                   pressed ? styles.dropdownItemPressed : null,
+                  presetKey === p.key ? styles.dropdownItemActive : null,
                 ]}
               >
-                <Text style={styles.dropdownText}>{p.label}</Text>
+                <Text style={[
+                  styles.dropdownText,
+                  presetKey === p.key ? styles.dropdownTextActive : null,
+                ]}>
+                  {p.label}
+                </Text>
+                {presetKey === p.key && <Text style={styles.dropdownCheck}>✓</Text>}
               </Pressable>
             ))}
           </View>
@@ -363,43 +372,35 @@ function Label({ text }) {
   return <Text style={styles.label}>{text}</Text>;
 }
 
-function Input({ styleOverride, ...props }) {
-  return (
-    <TextInput
-      {...props}
-      style={[styles.input, styleOverride]}
-      placeholderTextColor="#94A3B8"
-    />
-  );
-}
-
 const styles = StyleSheet.create({
   container: { padding: 16 },
 
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 8,
+    borderRadius: 12,
     padding: 16,
     elevation: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.08,
-    shadowRadius: 2,
+    shadowRadius: 4,
   },
 
   sectionTitle: {
     fontSize: 12,
     fontWeight: '700',
     color: '#64748B',
-    marginBottom: 10,
-    letterSpacing: 0.4,
+    marginBottom: 12,
+    letterSpacing: 0.6,
   },
 
   label: {
     fontSize: 11,
+    fontWeight: '600',
     color: '#64748B',
-    marginTop: 12,
+    marginTop: 14,
     marginBottom: 4,
+    letterSpacing: 0.3,
   },
 
   input: {
@@ -414,13 +415,24 @@ const styles = StyleSheet.create({
   },
 
   inputLocked: {
-    backgroundColor: '#F9FAFB',
-    color: '#64748B',
+    backgroundColor: '#F8FAFC',
+    color: '#94A3B8',
   },
 
   row: { flexDirection: 'row' },
 
-  // Modern select (like your last screenshot)
+  // Name fallback hint
+  nameFallbackHint: {
+    marginTop: 4,
+    fontSize: 11,
+    color: '#94A3B8',
+  },
+  nameFallbackValue: {
+    color: '#2563EB',
+    fontWeight: '600',
+  },
+
+  // Select box
   selectBox: {
     borderWidth: 1.5,
     borderColor: '#93C5FD',
@@ -433,7 +445,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   selectBoxOpen: {
-    borderColor: '#60A5FA',
+    borderColor: '#2563EB',
   },
   selectText: {
     fontSize: 14,
@@ -442,21 +454,76 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   selectPlaceholder: {
-    color: '#64748B',
-    fontWeight: '600',
+    color: '#94A3B8',
+    fontWeight: '400',
   },
   chevron: {
     fontSize: 16,
     color: '#64748B',
     marginLeft: 12,
-    marginTop: -1,
   },
 
+  // Error
+  errorBox: {
+    marginTop: 12,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 8,
+    padding: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#DC2626',
+  },
+  errorText: {
+    color: '#DC2626',
+    fontSize: 13,
+  },
+
+  footer: {
+    flexDirection: 'row',
+    marginTop: 20,
+  },
+
+  cancelBtn: {
+    flex: 1,
+    padding: 13,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    marginRight: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  cancelText: {
+    color: '#475569',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+
+  addBtn: {
+    flex: 2,
+    padding: 13,
+    borderRadius: 8,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
+  hint: {
+    marginTop: 12,
+    fontSize: 12,
+    color: '#64748B',
+    lineHeight: 18,
+  },
+
+  // Dropdown
   overlay: {
     flex: 1,
     backgroundColor: 'transparent',
   },
-
   dropdown: {
     position: 'absolute',
     backgroundColor: '#fff',
@@ -470,72 +537,30 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
   },
-
   dropdownItem: {
     paddingHorizontal: 14,
     paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-
-  dropdownItemSelected: {
-    backgroundColor: '#F1F5F9',
+  dropdownItemActive: {
+    backgroundColor: '#EFF6FF',
   },
-
   dropdownItemPressed: {
     backgroundColor: '#E8F0FF',
   },
-
   dropdownText: {
     fontSize: 14,
     color: '#334155',
     fontWeight: '600',
   },
-
-
-
-  error: {
-    color: '#DC2626',
-    marginTop: 10,
-    fontSize: 12,
+  dropdownTextActive: {
+    color: '#2563EB',
   },
-
-  footer: {
-    flexDirection: 'row',
-    marginTop: 18,
-  },
-
-  cancelBtn: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    alignItems: 'center',
-    marginRight: 10,
-    backgroundColor: '#FFFFFF',
-  },
-
-  cancelText: {
-    color: '#475569',
-    fontWeight: '600',
-  },
-
-  addBtn: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    backgroundColor: '#2563EB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  addText: {
-    color: '#FFFFFF',
+  dropdownCheck: {
+    fontSize: 14,
+    color: '#2563EB',
     fontWeight: '700',
-  },
-
-  hint: {
-    marginTop: 12,
-    fontSize: 12,
-    color: '#64748B',
   },
 });
